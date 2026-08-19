@@ -1,9 +1,13 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
+import { SESSION_COOKIE } from "@/lib/session-cookie";
 import type { Role } from "@/models/User";
 
-const SESSION_COOKIE = "edupilot_session";
-const MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
+export { SESSION_COOKIE };
+
+/** Default token lifetime, and the cookie lifetime when "Remember me" is on. */
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+export const REMEMBERED_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 function secretKey(): Uint8Array {
   const secret = process.env.JWT_SECRET;
@@ -19,12 +23,15 @@ export type SessionPayload = {
   role: Role;
 };
 
-export async function signSession(payload: SessionPayload): Promise<string> {
+export async function signSession(
+  payload: SessionPayload,
+  ttlSeconds: number = SESSION_TTL_SECONDS
+): Promise<string> {
   return new SignJWT({ email: payload.email, role: payload.role })
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(payload.sub)
     .setIssuedAt()
-    .setExpirationTime(`${MAX_AGE_SECONDS}s`)
+    .setExpirationTime(`${ttlSeconds}s`)
     .sign(secretKey());
 }
 
@@ -42,15 +49,41 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
   }
 }
 
-export async function setSessionCookie(token: string): Promise<void> {
+/**
+ * Writes the session cookie. `maxAge: null` omits Max-Age, which makes it a
+ * session cookie the browser drops when it closes — that is what an unchecked
+ * "Remember me" should do. The JWT still carries its own expiry either way.
+ */
+export async function setSessionCookie(
+  token: string,
+  { maxAge = SESSION_TTL_SECONDS }: { maxAge?: number | null } = {}
+): Promise<void> {
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: MAX_AGE_SECONDS,
+    ...(maxAge === null ? {} : { maxAge }),
   });
+}
+
+/**
+ * Signs a token for `payload` and installs it as the session cookie.
+ *
+ * `remember: true`  -> 30 days, survives a browser restart.
+ * `remember: false` -> 7-day token in a session cookie, dropped on browser close.
+ * `remember` omitted -> 7-day persistent cookie (what API clients got before
+ * the flag existed, so /api/auth/login without the field is unchanged).
+ */
+export async function startSession(
+  payload: SessionPayload,
+  { remember }: { remember?: boolean } = {}
+): Promise<string> {
+  const ttl = remember === true ? REMEMBERED_TTL_SECONDS : SESSION_TTL_SECONDS;
+  const token = await signSession(payload, ttl);
+  await setSessionCookie(token, { maxAge: remember === false ? null : ttl });
+  return token;
 }
 
 export async function clearSessionCookie(): Promise<void> {

@@ -13,9 +13,10 @@ new invariant, new dependency.
 ## 1. What we are building
 
 EduPilot is a learning platform: instructors publish courses made of ordered lessons, students
-enroll and track completion. The current milestone delivers the **entire backend as a JSON API**
-plus a single landing page that documents the endpoints. There is no student- or instructor-facing
-UI yet; every feature below is reachable only over HTTP.
+enroll and track completion. The current milestone delivers the **entire backend as a JSON API**,
+the **sign-in and sign-up screens** on top of it (§6), and a page documenting the endpoints. Beyond
+authentication there is still no student- or instructor-facing UI; courses, lessons and enrollments
+are reachable only over HTTP.
 
 Scope delivered so far:
 
@@ -28,7 +29,10 @@ Scope delivered so far:
 | Lesson CRUD, ordering, free-preview gating | done |
 | Enrollment (idempotent) and per-lesson progress | done |
 | Seed script with demo data | done |
-| Product UI, payments, uploads, tests | not started |
+| Sign-in / sign-up screens, session-gated dashboard stub | done |
+| Social sign-in (Google, Microsoft, Apple) | buttons only, no OAuth backend |
+| Password reset, terms and privacy pages | placeholders |
+| Catalogue / course / lesson UI, payments, uploads, tests | not started |
 
 ## 2. Architecture
 
@@ -36,27 +40,37 @@ Single Next.js 16 deployable — no separate API process. Route handlers under
 [src/app/api/](../src/app/api/) *are* the backend; they talk to MongoDB through Mongoose.
 
 ```
-browser / curl
-      │  fetch with credentials (edupilot_session cookie)
-      ▼
-Next.js route handler          src/app/api/**/route.ts
-      │  1. requireAuth / requireRole   → src/lib/api.ts
-      │  2. connectDB()                 → src/lib/db.ts   (cached connection)
-      │  3. zodSchema.parse(body)       → src/lib/validation.ts
-      │  4. Mongoose model op           → src/models/*.ts
-      │  5. ok(data) | handleError(err) → src/lib/api.ts
-      ▼
-MongoDB (mongoose 9)
+auth screens (/login, /signup)          browser / curl
+      │  <form action={serverAction}>          │  fetch with credentials
+      ▼                                        │  (edupilot_session cookie)
+Server Action  src/lib/auth-actions.ts         │
+      │  zod form schema                       │
+      ├──────────────► src/lib/accounts.ts ◄───┤   shared account logic
+      │                                        ▼
+      │                          Next.js route handler   src/app/api/**/route.ts
+      │                          │  1. requireAuth / requireRole   → src/lib/api.ts
+      │                          │  2. connectDB()                 → src/lib/db.ts   (cached)
+      │                          │  3. zodSchema.parse(body)       → src/lib/validation.ts
+      │                          │  4. Mongoose model op           → src/models/*.ts
+      │                          │  5. ok(data) | handleError(err) → src/lib/api.ts
+      ▼                          ▼
+              MongoDB (mongoose 9)
 ```
 
 Four layers, each with one job:
 
 | Layer | Files | Responsibility |
 | --- | --- | --- |
-| Transport | `src/app/api/**/route.ts` | HTTP shape, authorization decisions, orchestration |
+| UI | `src/app/(auth)/**`, [src/components/](../src/components/) | screens, form state, client-side affordances |
+| Transport | `src/app/api/**/route.ts`, [src/lib/auth-actions.ts](../src/lib/auth-actions.ts) | HTTP / action shape, authorization decisions, orchestration |
 | Cross-cutting | [src/lib/](../src/lib/) | connection, session, response envelope, error mapping, schemas |
 | Domain | [src/models/](../src/models/) | schema, indexes, serialization rules |
+| Domain services | [src/lib/accounts.ts](../src/lib/accounts.ts) | account creation and credential checks, shared by both transports |
 | Tooling | [scripts/seed.ts](../scripts/seed.ts) | reproducible local data |
+
+Sign-up and sign-in exist on two transports — the JSON API and the Server Actions behind the forms.
+Both go through `src/lib/accounts.ts`, so there is exactly one implementation of "create an account"
+and "check a password"; the transports only differ in how they report the outcome.
 
 Business logic lives in the route handler, not in the model. Models stay declarative (fields,
 indexes, `toJSON`) so there are no hidden hooks to reason about.
@@ -70,7 +84,7 @@ indexes, `toJSON`) so there are no hidden hooks to reason about.
 | Auth | JWT in httpOnly cookie (`jose`) | stateless verify, no session store; `jose` is Web-Crypto based |
 | Passwords | `bcryptjs`, cost 12 | pure JS, no native build step in CI/serverless |
 | Validation | Zod 4 | one schema per operation, parses *and* narrows the TS type |
-| Styling | Tailwind CSS 4 | landing page only for now |
+| Styling | Tailwind CSS 4 | utility classes in the components; no UI kit |
 
 Next.js 16 specifics this code depends on: dynamic route `params` is a **Promise** (`await params`),
 `cookies()` is **async** (`await cookies()`), and layouts type props via the generated
@@ -90,12 +104,20 @@ cached promise so the next request retries.
 
 ### 3.2 Sessions — [src/lib/auth.ts](../src/lib/auth.ts)
 
-- Cookie `edupilot_session`, `httpOnly`, `sameSite=lax`, `path=/`, `secure` in production, 7-day max-age.
+- Cookie `edupilot_session`, `httpOnly`, `sameSite=lax`, `path=/`, `secure` in production.
 - HS256 JWT signed with `JWT_SECRET`. Claims: `sub` (user id), `email`, `role`, `iat`, `exp`.
+- `startSession(payload, { remember })` signs the token and writes the cookie in one step. Lifetime
+  depends on `remember`, which is what the sign-in form's "Remember me" box controls:
+
+  | `remember` | Token TTL | Cookie | Reached from |
+  | --- | --- | --- | --- |
+  | `true` | 30 days | `Max-Age=2592000`, survives a restart | box ticked; every sign-up |
+  | `false` | 7 days | session cookie, dropped on browser close | box unticked |
+  | omitted | 7 days | `Max-Age=604800` | `POST /api/auth/login` without the field, so existing API clients are unaffected |
 - `getSession()` returns `null` for a missing, malformed, or expired token — verification failures
   are swallowed rather than surfaced, so a stale cookie reads as signed-out.
 - Role is carried **in the token**. Cheap to check, but a role change does not take effect until the
-  token expires or the user signs in again. Accepted for now (see §7).
+  token expires or the user signs in again. Accepted for now (see §8).
 
 ### 3.3 Response envelope and errors — [src/lib/api.ts](../src/lib/api.ts)
 
@@ -121,6 +143,11 @@ msg)` or let Zod/Mongoose throw, and a single `catch { return handleError(err) }
 error rather than a cast exception.
 
 ### 3.4 Validation — [src/lib/validation.ts](../src/lib/validation.ts)
+
+`passwordSchema` is the single password policy — at least 8 characters, at most 200, and at least one
+digit — shared by `registerSchema` and the sign-up form, so the API cannot accept a password the UI
+would reject. `loginFormSchema` and `signupFormSchema` are the form-facing variants: same rules, but
+every message is written to be rendered next to its field rather than returned as an API error.
 
 One schema per operation; update schemas are `.partial()` of the create schema, so PATCH is genuinely
 partial and cannot introduce a field the create path does not accept. Emails are lower-cased in the
@@ -195,12 +222,88 @@ Notable behaviours worth remembering:
 
 - Login returns the identical `401 "Invalid email or password"` for an unknown email and a wrong
   password, so the endpoint does not enumerate accounts.
+- `POST /api/auth/register` rejects a password with no digit (`422`), matching the rule the sign-up
+  form states. Passwords of 8+ letters that used to be accepted no longer are.
+- `POST /api/auth/login` accepts an optional `remember` boolean; omitting it keeps the previous
+  7-day persistent cookie (see §3.2).
 - Course detail accepts **either** an ObjectId or a slug (a 24-hex test decides), so URLs can be readable.
 - New lessons append: `order` defaults to the current lesson count unless supplied.
 - Progress writes reject a `lessonId` that belongs to a different course.
 - Catalogue `limit` is clamped to 1–50 and `page` is floored at 1.
 
-## 6. Environment, commands, local setup
+## 6. Web UI — sign-in and sign-up
+
+Two screens, `/login` and `/signup`, plus the session-gated `/dashboard` they land on. Built from the
+supplied design: a marketing panel from the `lg` breakpoint up, the form column at every width.
+
+### 6.1 Composition
+
+| Piece | File | Role |
+| --- | --- | --- |
+| Pages | `src/app/(auth)/login/page.tsx`, `signup/page.tsx` | server components: read `?next=`, redirect visitors who already have a valid session, supply the panel copy and feature list |
+| Shell | [auth-shell.tsx](../src/components/auth/auth-shell.tsx) | the two-column layout, brand lockup, decorative wave and dot grid, mobile back affordance |
+| Forms | [login-form.tsx](../src/components/auth/login-form.tsx), [signup-form.tsx](../src/components/auth/signup-form.tsx) | client components: `useActionState`, field state, pending button |
+| Fields | [fields.tsx](../src/components/auth/fields.tsx) | labelled input, password reveal toggle, checkbox, field errors, form banner |
+| Actions | [auth-actions.ts](../src/lib/auth-actions.ts) | `loginAction`, `signupAction`, `logoutAction` |
+| Artwork | [illustrations.tsx](../src/components/auth/illustrations.tsx), [icons.tsx](../src/components/icons.tsx), [brand.tsx](../src/components/brand.tsx) | inline SVG only — no image requests beyond the logo tile in `public/` |
+
+### 6.2 Submit path
+
+```
+<form action={loginAction}>
+      │  FormData
+      ▼
+loginFormSchema.safeParse        → field errors back to the form, no DB call
+      │
+      ▼
+authenticate() / createAccount() → src/lib/accounts.ts
+      │
+      ▼
+startSession(...)                → sets edupilot_session
+      │
+      ▼
+redirect(safeDestination(next))  → /dashboard
+```
+
+Four decisions worth knowing:
+
+- **Works without client JS.** The form is a real `<form action={serverAction}>`, so React renders a
+  native POST with the action reference in hidden fields. Validation, session and redirect (303) all
+  work with scripting disabled; the JS path adds inline errors without a full reload.
+- **Fields are controlled.** React resets an uncontrolled form once its action settles, which would
+  wipe the email on a failed sign-in. Holding values in `useState` keeps them across attempts.
+- **The password match is re-checked in the action.** zod skips a schema's cross-field `refine` when
+  any individual field is invalid, so a weak password plus unticked terms would otherwise hide a
+  mismatched confirmation until the next submit.
+- **Failures never say which half was wrong.** Sign-in shows one `Invalid email or password.` banner
+  for both an unknown email and a bad password, matching the API (§5).
+
+### 6.3 Route protection — [src/proxy.ts](../src/proxy.ts)
+
+`proxy.ts` (Next 16's renamed middleware) redirects `/dashboard*` to `/login?next=…` when the session
+**cookie is absent**. That is an optimistic check only — it never verifies the JWT. The page itself
+calls `getSession()` and is the authority.
+
+It deliberately does **not** bounce cookie-holders off `/login` and `/signup`: with an expired token
+that loops forever (`/login` → `/dashboard` → invalid → `/login`). Those two pages verify the session
+themselves and redirect only when it is genuinely valid.
+
+`?next=` runs through `safeDestination()` ([redirects.ts](../src/lib/redirects.ts)), which accepts
+only single-slash relative paths, so `?next=https://evil.example` and `?next=//evil.example` fall back
+to `/dashboard` instead of becoming an open redirect.
+
+### 6.4 What these screens do not do
+
+- **The Google / Microsoft / Apple buttons are inert.** They are drawn because the design has them,
+  but there is no OAuth client, redirect URI or callback; clicking one says so and points the user
+  back at email and password.
+- `/forgot-password`, `/terms` and `/privacy` are placeholder pages. They exist so no link on the
+  screens is dead, and each states plainly that the real thing is missing. A password reset needs a
+  token store and an email sender; sign-up asks people to agree to terms that are not yet written.
+- `/dashboard` is a landing stub — name, email, role, join date, sign out — not the product UI.
+- No rate limiting on either form (§8, item 7): both call straight through to the accounts service.
+
+## 7. Environment, commands, local setup
 
 Required env (see [.env.example](../.env.example)); the app throws a named error if either is missing:
 
@@ -222,7 +325,15 @@ password `password123`.
 
 Other scripts: `npm run build`, `npm start`, `npm run typecheck` (`tsc --noEmit`), `npm run lint`.
 
-## 7. Known gaps and accepted risks
+Page routes: `/login`, `/signup`, `/dashboard` (session-gated), `/forgot-password`, `/terms`,
+`/privacy`. Signing in with a seeded account is the quickest way to reach the dashboard.
+
+Atlas note: the cluster's **Network Access** list must contain the IP the app dials from. A source
+address that is not on it completes the TCP connection and then fails the TLS handshake, which
+surfaces as `MongooseServerSelectionError … tlsv1 alert internal error` after the 30s server-selection
+timeout — not as an auth error.
+
+## 8. Known gaps and accepted risks
 
 Recorded so they are decisions, not surprises. Roughly in priority order.
 
@@ -251,33 +362,35 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
    token version / denylist or server-side sessions.
 9. No CSRF token. `sameSite=lax` blocks cross-site POSTs from forms and fetch, which covers the
    common case, but it is the only defence.
-10. No email verification, no password reset, no audit log.
+10. No email verification, no password reset, no audit log. `/forgot-password` is a placeholder that
+    says so (§6.4).
 
 **Product / engineering**
 
 11. **No tests and no CI.** Nothing prevents a regression in the authorization rules above.
-12. No UI beyond the endpoint reference page — no auth screens, catalogue, or lesson player.
+12. UI covers sign-in, sign-up and a stub dashboard (§6) — no catalogue, course page, or lesson
+    player yet, and no way to reach the instructor-only endpoints from a browser.
 13. `price` is stored and ignored; enrollment is free regardless. No payment integration.
 14. No file or video upload — `videoUrl` and `coverImageUrl` are bare URL strings.
 15. Deep pagination uses `skip`/`limit`, which degrades on large offsets; `?q=` depends on the text
     index and, as written, cannot combine with relevance sorting.
 16. No structured logging, metrics, or health endpoint; `console.error` is the whole story.
 
-## 8. Next steps
+## 9. Next steps
 
 1. Tests around the authorization matrix in §5 and the invariants in §4 — highest value, since both
    are enforced by hand-written checks scattered across handlers.
-2. Fix §7 items 1–3: published gate on course detail, progress recompute on lesson delete, numeric
+2. Fix §8 items 1–3: published gate on course detail, progress recompute on lesson delete, numeric
    query-param guards.
 3. Login rate limiting.
 4. Product UI: auth screens → catalogue → course detail → lesson player with progress.
 5. Instructor surface: draft/publish flow, lesson reordering endpoint.
 6. Payments, if `price` is to mean anything.
 
-## 9. Document conventions
+## 10. Document conventions
 
 - One section per concern; keep §5's authorization table and §4's invariant list exhaustive — they are
   the parts reviewers rely on.
-- When a gap in §7 is closed, delete the entry and describe the behaviour in the relevant section
+- When a gap in §8 is closed, delete the entry and describe the behaviour in the relevant section
   rather than leaving it struck through.
 - Update *Last updated* on every edit.

@@ -2,7 +2,8 @@
 
 A learning platform built with **Next.js 16 (App Router)** and **MongoDB**. Next.js serves as
 both the frontend and the backend — the API lives in route handlers under `src/app/api`,
-so there is no separate server process.
+so there is no separate server process. Sign-in and sign-up screens are built on top of it;
+everything else is API-only for now.
 
 Architecture, design decisions, invariants and known gaps are documented in
 [docs/TECHNICAL.md](docs/TECHNICAL.md) — keep it updated alongside any behaviour change.
@@ -18,6 +19,7 @@ Architecture, design decisions, invariants and known gaps are documented in
 | Passwords  | bcrypt                                  |
 | Validation | Zod                                     |
 | Styling    | Tailwind CSS 4                          |
+| Forms      | Server Actions + `useActionState`        |
 
 ## Getting started
 
@@ -41,12 +43,32 @@ Generate a secret with:
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-For MongoDB Atlas, use the `mongodb+srv://...` connection string instead.
+For MongoDB Atlas, use the `mongodb+srv://...` connection string instead, and add the IP the app
+dials from to the cluster's **Network Access** list — an address that is not on it fails the TLS
+handshake after a 30-second timeout rather than returning an auth error.
 
 Seed accounts — password `password123`:
 
 - `ada@edupilot.dev` (instructor)
 - `sam@edupilot.dev` (student)
+
+## Pages
+
+| Route                 | Access        | What it is                                            |
+| --------------------- | ------------- | ----------------------------------------------------- |
+| `/login`              | public        | Sign in; "Remember me" extends the session to 30 days |
+| `/signup`             | public        | Create an account, then straight to the dashboard     |
+| `/dashboard`          | session       | Landing stub: name, email, role, join date, sign out  |
+| `/forgot-password`    | public        | Placeholder — no reset flow exists yet                |
+| `/terms`, `/privacy`  | public        | Placeholders the sign-up consent copy links to        |
+| `/api-reference`      | public        | The endpoint list below, rendered                     |
+
+Both forms work with JavaScript disabled: they post to a Server Action, which validates with Zod,
+sets the session cookie and redirects. The Google / Microsoft / Apple buttons are drawn from the
+design but not wired to any provider — clicking one says so.
+
+Passwords must be at least 8 characters and contain a digit. `POST /api/auth/register` enforces the
+same rule, so the API cannot accept a password the form would reject.
 
 ## Scripts
 
@@ -72,14 +94,25 @@ src/
       lessons/[id]/route.ts
       enrollments/route.ts
       enrollments/[id]/progress/route.ts
-    page.tsx              API reference landing page
+    (auth)/
+      login/page.tsx      sign-in screen
+      signup/page.tsx     sign-up screen
+      forgot-password, terms, privacy   placeholder pages
+    dashboard/page.tsx    session-gated landing stub
+  components/
+    auth/                 shell, forms, fields, social buttons, illustrations
+    brand.tsx icons.tsx notice-page.tsx
   lib/
     db.ts                 cached Mongoose connection (survives hot reload)
     auth.ts               JWT sign/verify + session cookie helpers
+    accounts.ts           createAccount / authenticate, shared by the API and the forms
+    auth-actions.ts       Server Actions behind the sign-in / sign-up forms
     api.ts                ok/fail responses, requireAuth/requireRole, error mapping
     validation.ts         Zod schemas + slugify
+    redirects.ts          ?next= sanitiser
   models/
     User.ts Course.ts Lesson.ts Enrollment.ts
+  proxy.ts                redirects /dashboard to /login without a session cookie
 scripts/
   seed.ts
 ```
@@ -94,7 +127,7 @@ on failure. Authentication is a `edupilot_session` httpOnly cookie set by regist
 | Method | Route                | Access | Notes                              |
 | ------ | -------------------- | ------ | ---------------------------------- |
 | POST   | `/api/auth/register` | public | `{ name, email, password, role? }` |
-| POST   | `/api/auth/login`    | public | `{ email, password }`              |
+| POST   | `/api/auth/login`    | public | `{ email, password, remember? }`   |
 | POST   | `/api/auth/logout`   | any    | Clears the session cookie          |
 | GET    | `/api/auth/me`       | auth   | Current user                       |
 
