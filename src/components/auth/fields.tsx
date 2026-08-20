@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
-import { AlertIcon, CheckIcon, EyeIcon, EyeOffIcon } from "@/components/icons";
+import { AlertIcon, CheckIcon, ChevronDownIcon, EyeIcon, EyeOffIcon } from "@/components/icons";
 
 const LABEL = "mb-1.5 block text-[13px] font-medium text-slate-700 dark:text-slate-300";
 
@@ -198,6 +198,68 @@ export function CheckboxField({
         </span>
         <span className="text-[13px] leading-[18px] text-slate-600 dark:text-slate-400">{children}</span>
       </label>
+      <FieldError id={errorId} messages={errors} />
+    </div>
+  );
+}
+
+export function SelectField({
+  label,
+  name,
+  value,
+  onChange,
+  options,
+  placeholder = "Select an option",
+  hint,
+  errors,
+}: {
+  label: string;
+  name: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: readonly { value: string; label: string }[];
+  placeholder?: string;
+  hint?: string;
+  errors?: string[];
+}) {
+  const id = useId();
+  const errorId = `${id}-error`;
+  const hintId = `${id}-hint`;
+  const invalid = Boolean(errors?.length);
+
+  return (
+    <div>
+      <label htmlFor={id} className={LABEL}>
+        {label}
+      </label>
+      <div className="relative">
+        <select
+          id={id}
+          name={name}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? errorId : hint ? hintId : undefined}
+          className={`${INPUT_BASE} ${invalid ? INPUT_INVALID : INPUT_IDLE} appearance-none pl-3.5 pr-10 ${
+            value ? "" : "text-slate-400 dark:text-slate-500"
+          }`}
+        >
+          <option value="" disabled>
+            {placeholder}
+          </option>
+          {options.map((option) => (
+            <option key={option.value} value={option.value} className="text-slate-900">
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDownIcon className="pointer-events-none absolute right-3 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-400" />
+      </div>
+      {hint && !invalid && (
+        <p id={hintId} className="mt-1.5 text-[12px] text-slate-400 dark:text-slate-500">
+          {hint}
+        </p>
+      )}
       <FieldError id={errorId} messages={errors} />
     </div>
   );

@@ -8,7 +8,7 @@ import { SocialSignIn } from "@/components/auth/social-sign-in";
 import { SubmitButton } from "@/components/auth/submit-button";
 import { MailIcon, UserIcon } from "@/components/icons";
 
-export function SignupForm({ next }: { next?: string }) {
+export function SignupForm({ next, notice }: { next?: string; notice?: string }) {
   const [state, formAction, pending] = useActionState(signupAction, undefined);
 
   const [name, setName] = useState("");
@@ -22,7 +22,8 @@ export function SignupForm({ next }: { next?: string }) {
       <form action={formAction} noValidate className="space-y-4">
         {next && <input type="hidden" name="next" value={next} />}
 
-        {state?.message && <FormMessage>{state.message}</FormMessage>}
+        {/* A failed submit outranks a notice carried in from the URL. */}
+        {(state?.message ?? notice) && <FormMessage>{state?.message ?? notice}</FormMessage>}
 
         <TextField
           label="Full name"
@@ -90,7 +91,7 @@ export function SignupForm({ next }: { next?: string }) {
         </div>
       </form>
 
-      <SocialSignIn label="or sign up with" />
+      <SocialSignIn label="or sign up with" next={next} />
 
       <p className="text-center text-[13px] text-slate-500 dark:text-slate-400">
         Already have an account?{" "}

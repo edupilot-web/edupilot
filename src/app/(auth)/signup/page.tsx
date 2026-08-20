@@ -4,6 +4,7 @@ import { AuthShell, type Feature } from "@/components/auth/auth-shell";
 import { BuildingFutureIllustration } from "@/components/auth/illustrations";
 import { SignupForm } from "@/components/auth/signup-form";
 import { LayoutIcon, TrendingUpIcon, UsersIcon } from "@/components/icons";
+import { authErrorMessage } from "@/lib/auth-errors";
 import { getSession } from "@/lib/auth";
 import { safeDestination } from "@/lib/redirects";
 
@@ -34,7 +35,7 @@ const FEATURES: Feature[] = [
 ];
 
 export default async function SignupPage(props: PageProps<"/signup">) {
-  const { next } = await props.searchParams;
+  const { next, error } = await props.searchParams;
   const destination = safeDestination(next);
 
   if (await getSession()) redirect(destination);
@@ -55,7 +56,10 @@ export default async function SignupPage(props: PageProps<"/signup">) {
       formSubheading="Let's get you started!"
       backHref="/login"
     >
-      <SignupForm next={next === undefined ? undefined : destination} />
+      <SignupForm
+        next={next === undefined ? undefined : destination}
+        notice={authErrorMessage(error)}
+      />
     </AuthShell>
   );
 }

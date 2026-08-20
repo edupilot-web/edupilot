@@ -4,6 +4,7 @@ import { AuthShell, type Feature } from "@/components/auth/auth-shell";
 import { StudyingTogetherIllustration } from "@/components/auth/illustrations";
 import { LoginForm } from "@/components/auth/login-form";
 import { CubeIcon, SendIcon, UsersIcon } from "@/components/icons";
+import { authErrorMessage } from "@/lib/auth-errors";
 import { getSession } from "@/lib/auth";
 import { safeDestination } from "@/lib/redirects";
 
@@ -34,7 +35,7 @@ const FEATURES: Feature[] = [
 ];
 
 export default async function LoginPage(props: PageProps<"/login">) {
-  const { next } = await props.searchParams;
+  const { next, error } = await props.searchParams;
   const destination = safeDestination(next);
 
   // Already signed in — no reason to show the form again.
@@ -59,7 +60,10 @@ export default async function LoginPage(props: PageProps<"/login">) {
         </div>
       }
     >
-      <LoginForm next={next === undefined ? undefined : destination} />
+      <LoginForm
+        next={next === undefined ? undefined : destination}
+        notice={authErrorMessage(error)}
+      />
     </AuthShell>
   );
 }

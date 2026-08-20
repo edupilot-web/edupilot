@@ -1,4 +1,5 @@
 import mongoose, { Schema, Model, InferSchemaType } from "mongoose";
+import { resetModelInDev } from "@/models/model-cache";
 
 export const COURSE_LEVELS = ["beginner", "intermediate", "advanced"] as const;
 
@@ -21,6 +22,8 @@ const courseSchema = new Schema(
 courseSchema.index({ title: "text", description: "text", tags: "text" });
 
 export type CourseDoc = InferSchemaType<typeof courseSchema>;
+
+resetModelInDev("Course");
 
 export const Course: Model<CourseDoc> =
   (mongoose.models.Course as Model<CourseDoc>) ||

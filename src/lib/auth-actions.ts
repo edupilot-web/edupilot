@@ -118,7 +118,10 @@ export async function signupAction(
     return { message: GENERIC_FAILURE };
   }
 
-  redirect(safeDestination(text(formData, "next")));
+  // Straight into onboarding. Any `next` is carried through the steps and used
+  // once the education step completes.
+  const next = text(formData, "next");
+  redirect(next ? `/onboarding/profile?next=${encodeURIComponent(next)}` : "/onboarding/profile");
 }
 
 /** Clears the session cookie and returns the user to the sign-in screen. */

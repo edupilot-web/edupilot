@@ -5,8 +5,13 @@ both the frontend and the backend — the API lives in route handlers under `src
 so there is no separate server process. Sign-in and sign-up screens are built on top of it;
 everything else is API-only for now.
 
-Architecture, design decisions, invariants and known gaps are documented in
-[docs/TECHNICAL.md](docs/TECHNICAL.md) — keep it updated alongside any behaviour change.
+Documentation, and keep it updated alongside any behaviour change:
+
+- **[docs/routes/](docs/routes/) — one document per route.** Each covers the whole slice for that
+  URL: the page or handler file, its server and client halves, the data it reads or writes, who may
+  reach it, every status it returns, and what about it is not real yet.
+- [docs/TECHNICAL.md](docs/TECHNICAL.md) — what spans routes: architecture, cross-cutting design,
+  the data model and its invariants, environment, and the list of known gaps.
 
 ## Stack
 
@@ -35,6 +40,10 @@ npm run dev                  # http://localhost:3000
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DB=edupilot
 JWT_SECRET=<long random string>
+
+# Optional — enables "Continue with Google"
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
 ```
 
 Generate a secret with:
@@ -54,14 +63,38 @@ Seed accounts — password `password123`:
 
 ## Pages
 
-| Route                 | Access        | What it is                                            |
-| --------------------- | ------------- | ----------------------------------------------------- |
-| `/login`              | public        | Sign in; "Remember me" extends the session to 30 days |
-| `/signup`             | public        | Create an account, then straight to the dashboard     |
-| `/dashboard`          | session       | Landing stub: name, email, role, join date, sign out  |
-| `/forgot-password`    | public        | Placeholder — no reset flow exists yet                |
-| `/terms`, `/privacy`  | public        | Placeholders the sign-up consent copy links to        |
-| `/api-reference`      | public        | The endpoint list below, rendered                     |
+Per-page detail — composition, server/client split, states, gaps — in
+[docs/routes/pages/](docs/routes/pages/).
+
+| Route                 | Access        | What it is                                             |
+| --------------------- | ------------- | ------------------------------------------------------ |
+| `/`                   | public        | Marketing hero; most header links are not built yet    |
+| `/login`              | public        | Sign in; "Remember me" extends the session to 30 days  |
+| `/signup`             | public        | Create an account, then straight to the dashboard      |
+| `/onboarding/profile` | session       | Onboarding step 1 — name, phone, city                   |
+| `/onboarding/education` | session     | Onboarding step 2 — college, program, current year      |
+| `/dashboard`          | session       | Greeting plus six cards, inside the app shell           |
+| 13 more app routes    | session       | Sidebar destinations, each a "not built yet" placeholder |
+| `/forgot-password`    | public        | Placeholder — no reset flow exists yet                 |
+| `/terms`, `/privacy`  | public        | Placeholders the sign-up consent copy links to         |
+| `/api-reference`      | public        | The endpoint list below, rendered                      |
+
+New accounts go **sign up → profile → education → dashboard**. `onboardingCompletedAt` on the user is
+the gate: the app redirects to onboarding until it is set, and onboarding redirects to the dashboard
+once it is, so an abandoned sign-up resumes and a finished user cannot reopen the steps.
+
+"Continue with Google" is a real OAuth 2.0 / OpenID Connect flow (state + nonce, `id_token` verified
+against Google's JWKS). Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to enable it and register
+`http://localhost:3000/api/auth/google/callback` as an authorised redirect URI; with them unset the
+button explains it is not configured. Microsoft and Apple remain unwired.
+
+Signed-in pages live under `src/app/(app)/` and share a shell: a dark navigation rail (an off-canvas
+drawer below `lg`), a top bar with search, notifications and the account menu, and the dashboard.
+
+**The dashboard cards show placeholder content.** Tasks, wallet, streaks, timetable, notices and
+placements all come from `src/lib/dashboard-data.ts`; there are no models behind them yet. The only
+live value is the signed-in user. Search, notifications and Upgrade to Pro say they are not connected
+rather than pretending to work.
 
 Both forms work with JavaScript disabled: they post to a Server Action, which validates with Zod,
 sets the session cookie and redirects. The Google / Microsoft / Apple buttons are drawn from the
@@ -88,6 +121,7 @@ src/
   app/
     api/
       auth/{register,login,logout,me}/route.ts
+      auth/google/{start,callback}/route.ts
       courses/route.ts
       courses/[id]/route.ts
       courses/[id]/lessons/route.ts
@@ -98,9 +132,16 @@ src/
       login/page.tsx      sign-in screen
       signup/page.tsx     sign-up screen
       forgot-password, terms, privacy   placeholder pages
-    dashboard/page.tsx    session-gated landing stub
+    (onboarding)/
+      layout.tsx          session gate, redirects once onboarding is done
+      onboarding/profile, onboarding/education
+    (app)/
+      layout.tsx          session gate + onboarding gate + app shell
+      dashboard/page.tsx  the dashboard
+      ai-tutor, timetable, wallet, ...  13 placeholder screens
   components/
     auth/                 shell, forms, fields, social buttons, illustrations
+    app/                  sidebar, top bar, dashboard cards, nav model
     brand.tsx icons.tsx notice-page.tsx
   lib/
     db.ts                 cached Mongoose connection (survives hot reload)
@@ -110,6 +151,12 @@ src/
     api.ts                ok/fail responses, requireAuth/requireRole, error mapping
     validation.ts         Zod schemas + slugify
     redirects.ts          ?next= sanitiser
+    app-routes.ts         the signed-in path list (shared with proxy.ts)
+    current-user.ts       request-cached session user
+    google-oauth.ts       authorize URL, token exchange, id_token verification
+    onboarding-actions.ts Server Actions for the two onboarding steps
+    user-fields.ts        roles, programs, study years (no mongoose import)
+    dashboard-data.ts     placeholder card content
   models/
     User.ts Course.ts Lesson.ts Enrollment.ts
   proxy.ts                redirects /dashboard to /login without a session cookie
@@ -122,12 +169,17 @@ scripts/
 Every response is wrapped: `{ "data": ... }` on success, `{ "error": { "message", "details" } }`
 on failure. Authentication is a `edupilot_session` httpOnly cookie set by register/login.
 
+The tables below are a summary. Full contracts — request schemas, every status, the writes each
+handler performs, and its gaps — are in [docs/routes/api/](docs/routes/api/).
+
 ### Auth
 
 | Method | Route                | Access | Notes                              |
 | ------ | -------------------- | ------ | ---------------------------------- |
 | POST   | `/api/auth/register` | public | `{ name, email, password, role? }` |
 | POST   | `/api/auth/login`    | public | `{ email, password, remember? }`   |
+| GET    | `/api/auth/google/start` | public | Redirects to Google's consent screen |
+| GET    | `/api/auth/google/callback` | public | Verifies the `id_token`, then signs in |
 | POST   | `/api/auth/logout`   | any    | Clears the session cookie          |
 | GET    | `/api/auth/me`       | auth   | Current user                       |
 

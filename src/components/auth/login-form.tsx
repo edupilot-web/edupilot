@@ -8,7 +8,7 @@ import { SocialSignIn } from "@/components/auth/social-sign-in";
 import { SubmitButton } from "@/components/auth/submit-button";
 import { LockIcon, MailIcon } from "@/components/icons";
 
-export function LoginForm({ next }: { next?: string }) {
+export function LoginForm({ next, notice }: { next?: string; notice?: string }) {
   const [state, formAction, pending] = useActionState(loginAction, undefined);
 
   // Held in state rather than left uncontrolled: React resets an uncontrolled
@@ -23,7 +23,8 @@ export function LoginForm({ next }: { next?: string }) {
       <form action={formAction} noValidate className="space-y-4">
         {next && <input type="hidden" name="next" value={next} />}
 
-        {state?.message && <FormMessage>{state.message}</FormMessage>}
+        {/* A failed submit outranks a notice carried in from the URL. */}
+        {(state?.message ?? notice) && <FormMessage>{state?.message ?? notice}</FormMessage>}
 
         <TextField
           label="Email address"
@@ -66,7 +67,7 @@ export function LoginForm({ next }: { next?: string }) {
         </div>
       </form>
 
-      <SocialSignIn label="or continue with" />
+      <SocialSignIn label="or continue with" next={next} />
 
       <p className="text-center text-[13px] text-slate-500 dark:text-slate-400">
         Don&apos;t have an account?{" "}

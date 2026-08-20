@@ -282,3 +282,173 @@ export function LightbulbIcon(props: IconProps) {
     </Outline>
   );
 }
+
+/* ---- App shell: sidebar navigation and dashboard cards ---- */
+
+export function DashboardIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="3.5" y="3.5" width="7.5" height="9" rx="2" />
+      <rect x="13.5" y="3.5" width="7" height="5.5" rx="2" />
+      <rect x="3.5" y="15" width="7.5" height="5.5" rx="2" />
+      <rect x="13.5" y="11.5" width="7" height="9" rx="2" />
+    </Outline>
+  );
+}
+
+export function RobotIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="4.5" y="7.6" width="15" height="11.6" rx="3.5" />
+      <path d="M12 4.3v3.3" />
+      <circle cx="12" cy="3" r="1.2" />
+      <path d="M9.3 12.4v1.7M14.7 12.4v1.7" />
+    </Outline>
+  );
+}
+
+export function BoltIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M13.6 2.5 5.5 13.4h4.9l-1.4 8.1 8.1-11h-4.9l1.4-8Z" />
+    </Outline>
+  );
+}
+
+export function VideoIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="2.5" y="5.5" width="13" height="13" rx="3" />
+      <path d="m15.5 10.6 5-2.9v8.6l-5-2.9v-2.8Z" />
+    </Outline>
+  );
+}
+
+export function CalendarIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="3" />
+      <path d="M8 3v4M16 3v4M3.5 10h17" />
+    </Outline>
+  );
+}
+
+export function MegaphoneIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M11 8.4l8.2-3.9a1 1 0 0 1 1.4.9v13.2a1 1 0 0 1-1.4.9L11 15.6" />
+      <path d="M11 8.4H6.3A2.3 2.3 0 0 0 4 10.7v2.6a2.3 2.3 0 0 0 2.3 2.3H11V8.4Z" />
+      <path d="M7.6 15.6v3.5a1 1 0 0 0 1 1h1.1a1 1 0 0 0 1-1v-3.5" />
+    </Outline>
+  );
+}
+
+export function TicketIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M3.5 8.6V6.8a1.3 1.3 0 0 1 1.3-1.3h14.4a1.3 1.3 0 0 1 1.3 1.3v1.8a2.6 2.6 0 0 0 0 6.8v1.8a1.3 1.3 0 0 1-1.3 1.3H4.8a1.3 1.3 0 0 1-1.3-1.3v-1.8a2.6 2.6 0 0 0 0-6.8Z" />
+      <path d="M9.8 5.5v13" strokeDasharray="2.5 2.5" />
+    </Outline>
+  );
+}
+
+export function BriefcaseIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="2.5" y="7" width="19" height="13" rx="2.5" />
+      <path d="M8.5 7V5.6a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2V7M2.5 12.5h19" />
+    </Outline>
+  );
+}
+
+export function WalletIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="2.5" y="5.5" width="19" height="14" rx="3" />
+      <path d="M2.5 10.2h19" />
+      <circle cx="17.2" cy="14.8" r="1.2" />
+    </Outline>
+  );
+}
+
+export function GiftIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <rect x="3" y="8.6" width="18" height="11.4" rx="2" />
+      <path d="M3 13.2h18M12 8.6V20" />
+      <path d="M12 8.6S11.2 4 8.7 4a2.3 2.3 0 0 0 0 4.6M12 8.6S12.8 4 15.3 4a2.3 2.3 0 0 1 0 4.6" />
+    </Outline>
+  );
+}
+
+export function SettingsIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M10.4 3.4a1.2 1.2 0 0 1 1.2-1.1h.8a1.2 1.2 0 0 1 1.2 1.1l.15 1.3c.5.16.97.43 1.4.7l1.2-.5a1.2 1.2 0 0 1 1.5.5l.4.7a1.2 1.2 0 0 1-.3 1.5l-1 .8a6.4 6.4 0 0 1 0 1.6l1 .8a1.2 1.2 0 0 1 .3 1.5l-.4.7a1.2 1.2 0 0 1-1.5.5l-1.2-.5c-.43.28-.9.54-1.4.7l-.15 1.3a1.2 1.2 0 0 1-1.2 1.1h-.8a1.2 1.2 0 0 1-1.2-1.1l-.15-1.3c-.5-.16-.97-.42-1.4-.7l-1.2.5a1.2 1.2 0 0 1-1.5-.5l-.4-.7a1.2 1.2 0 0 1 .3-1.5l1-.8a6.4 6.4 0 0 1 0-1.6l-1-.8a1.2 1.2 0 0 1-.3-1.5l.4-.7a1.2 1.2 0 0 1 1.5-.5l1.2.5c.43-.27.9-.54 1.4-.7l.15-1.3Z" />
+      <circle cx="12" cy="12" r="2.7" />
+    </Outline>
+  );
+}
+
+export function ClockIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <circle cx="12" cy="12" r="8.75" />
+      <path d="M12 7.4V12l3.2 2" />
+    </Outline>
+  );
+}
+
+export function PlusIcon(props: IconProps) {
+  return (
+    <Outline strokeWidth={2.25} {...props}>
+      <path d="M12 5.5v13M5.5 12h13" />
+    </Outline>
+  );
+}
+
+export function CheckCircleIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <circle cx="12" cy="12" r="8.75" />
+      <path d="m8.4 12.3 2.4 2.4 4.8-4.9" />
+    </Outline>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="m9.5 5 7 7-7 7" />
+    </Outline>
+  );
+}
+
+/** Filled, because it reads as a badge rather than a line icon. */
+export function CrownIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M2.6 7.3a1.1 1.1 0 0 1 1.7-.2l3.3 3 3.4-5.6a1.1 1.1 0 0 1 1.9 0l3.4 5.6 3.3-3a1.1 1.1 0 0 1 1.8 1.1l-2.2 8.4a1.4 1.4 0 0 1-1.4 1.1H5.2a1.4 1.4 0 0 1-1.4-1.1L1.6 8.2a1.1 1.1 0 0 1 1-.9Z" />
+      <rect x="4.6" y="19" width="14.8" height="2.2" rx="1.1" />
+    </svg>
+  );
+}
+
+/** Filled, so the streak flame keeps its weight next to bold numerals. */
+export function FlameIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M13.1 1.8c.3 3 1.6 4 3.2 5.7 1.6 1.7 2.7 3.6 2.7 6A6.9 6.9 0 0 1 12 20.4a6.9 6.9 0 0 1-7-6.9c0-2.9 1.5-4.9 3-6.6.3 1.7 1.2 2.8 2.3 3.3-.8-3.3-.3-6.2 2.8-8.4Z" />
+      <path d="M12 20.4a3.6 3.6 0 0 1-3.6-3.6c0-1.7 1-2.7 1.9-3.7.2 1 .8 1.7 1.5 2-.5-1.9 0-3.4 1.6-4.6.2 1.7.9 2.3 1.7 3.2.7.8 1.1 1.7 1.1 3.1A3.6 3.6 0 0 1 12 20.4Z" fill="#fff" opacity="0.35" />
+    </svg>
+  );
+}
+
+export function MinusCircleIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <circle cx="12" cy="12" r="8.75" />
+      <path d="M8.2 12h7.6" />
+    </Outline>
+  );
+}

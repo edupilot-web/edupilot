@@ -23,9 +23,29 @@ async function main() {
 
   const passwordHash = await bcrypt.hash("password123", 12);
 
+  // Onboarding is marked complete so the demo accounts land on the dashboard
+  // rather than being sent through the profile/education steps.
+  const onboarded = { onboardingCompletedAt: new Date(), emailVerified: true };
+
   const [instructor, student] = await User.create([
-    { name: "Ada Lovelace", email: "ada@edupilot.dev", passwordHash, role: "instructor" },
-    { name: "Sam Student", email: "sam@edupilot.dev", passwordHash, role: "student" },
+    {
+      name: "Ada Lovelace",
+      email: "ada@edupilot.dev",
+      passwordHash,
+      role: "instructor",
+      city: "Cambridge",
+      ...onboarded,
+      education: { college: "University of Cambridge", program: "PhD", currentYear: 2 },
+    },
+    {
+      name: "Sam Student",
+      email: "sam@edupilot.dev",
+      passwordHash,
+      role: "student",
+      city: "Pune",
+      ...onboarded,
+      education: { college: "Savitribai Phule Pune University", program: "B.Tech", currentYear: 3 },
+    },
   ]);
 
   const course = await Course.create({

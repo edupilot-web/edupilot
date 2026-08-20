@@ -3,22 +3,22 @@
 import { useState } from "react";
 import { AppleIcon, GoogleIcon, MicrosoftIcon } from "@/components/icons";
 
-const PROVIDERS = [
-  { id: "google", label: "Google", Icon: GoogleIcon },
-  { id: "microsoft", label: "Microsoft", Icon: MicrosoftIcon },
-  { id: "apple", label: "Apple", Icon: AppleIcon },
-] as const;
+const BUTTON =
+  "flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-200 bg-white py-2.5 text-[14px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800";
 
 /**
  * The three social buttons from the design.
  *
- * There is no OAuth backend yet — EduPilot has no client IDs, redirect URIs or
- * provider callbacks — so rather than pretend, each button explains that and
- * points the user back at email and password. Wiring one up later means
- * replacing `setUnavailable` with a link to that provider's authorize URL.
+ * Google is wired to the real OAuth flow (`/api/auth/google/start`). Microsoft
+ * and Apple have no client credentials or callbacks, so rather than pretend,
+ * they say so and point the user back at email and password.
  */
-export function SocialSignIn({ label }: { label: string }) {
+export function SocialSignIn({ label, next }: { label: string; next?: string }) {
   const [unavailable, setUnavailable] = useState<string | null>(null);
+
+  const googleHref = next
+    ? `/api/auth/google/start?next=${encodeURIComponent(next)}`
+    : "/api/auth/google/start";
 
   return (
     <div className="space-y-3">
@@ -42,17 +42,21 @@ export function SocialSignIn({ label }: { label: string }) {
         </p>
       )}
 
-      {PROVIDERS.map(({ id, label: name, Icon }) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => setUnavailable(name)}
-          className="flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-200 bg-white py-2.5 text-[14px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-        >
-          <Icon className="h-[18px] w-[18px] shrink-0" />
-          {name}
-        </button>
-      ))}
+      {/* A full navigation, not a client-side one: this leaves the app for Google. */}
+      <a href={googleHref} className={BUTTON}>
+        <GoogleIcon className="h-[18px] w-[18px] shrink-0" />
+        Continue with Google
+      </a>
+
+      <button type="button" onClick={() => setUnavailable("Microsoft")} className={BUTTON}>
+        <MicrosoftIcon className="h-[18px] w-[18px] shrink-0" />
+        Microsoft
+      </button>
+
+      <button type="button" onClick={() => setUnavailable("Apple")} className={BUTTON}>
+        <AppleIcon className="h-[18px] w-[18px] shrink-0" />
+        Apple
+      </button>
     </div>
   );
 }

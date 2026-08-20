@@ -1,4 +1,5 @@
 import mongoose, { Schema, Model, InferSchemaType } from "mongoose";
+import { resetModelInDev } from "@/models/model-cache";
 
 const lessonSchema = new Schema(
   {
@@ -16,6 +17,8 @@ const lessonSchema = new Schema(
 lessonSchema.index({ course: 1, order: 1 });
 
 export type LessonDoc = InferSchemaType<typeof lessonSchema>;
+
+resetModelInDev("Lesson");
 
 export const Lesson: Model<LessonDoc> =
   (mongoose.models.Lesson as Model<LessonDoc>) ||

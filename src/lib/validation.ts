@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ROLES } from "@/models/User";
+import { MAX_STUDY_YEAR, MIN_STUDY_YEAR, PROGRAMS, ROLES } from "@/models/User";
 import { COURSE_LEVELS } from "@/models/Course";
 
 /**
@@ -49,6 +49,37 @@ export const signupFormSchema = z
     error: "Passwords do not match",
     path: ["confirmPassword"],
   });
+
+/**
+ * Onboarding step 1. Name is required because it is shown all over the app;
+ * phone and city are optional, so an empty field must not read as an error.
+ */
+export const profileFormSchema = z.object({
+  name: z.string().min(2, "Enter your full name").max(120, "That name is too long").trim(),
+  phone: z
+    .string()
+    .trim()
+    .max(24, "That number is too long")
+    .refine((value) => value === "" || /^[+]?[\d\s()-]{7,}$/.test(value), {
+      error: "Enter a valid phone number, or leave it blank",
+    }),
+  city: z.string().trim().max(80, "That city name is too long"),
+});
+
+/** Onboarding step 2 — the College / Program / Current year branch of the flow. */
+export const educationFormSchema = z.object({
+  college: z
+    .string()
+    .min(2, "Enter your college or university")
+    .max(160, "That name is too long")
+    .trim(),
+  program: z.enum(PROGRAMS, { error: "Choose your program" }),
+  currentYear: z.coerce
+    .number({ error: "Choose your current year" })
+    .int("Choose your current year")
+    .min(MIN_STUDY_YEAR, "Choose your current year")
+    .max(MAX_STUDY_YEAR, `Year must be ${MIN_STUDY_YEAR}–${MAX_STUDY_YEAR}`),
+});
 
 export const courseCreateSchema = z.object({
   title: z.string().min(3).max(200),

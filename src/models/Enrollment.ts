@@ -1,4 +1,5 @@
 import mongoose, { Schema, Model, InferSchemaType } from "mongoose";
+import { resetModelInDev } from "@/models/model-cache";
 
 const enrollmentSchema = new Schema(
   {
@@ -15,6 +16,8 @@ const enrollmentSchema = new Schema(
 enrollmentSchema.index({ student: 1, course: 1 }, { unique: true });
 
 export type EnrollmentDoc = InferSchemaType<typeof enrollmentSchema>;
+
+resetModelInDev("Enrollment");
 
 export const Enrollment: Model<EnrollmentDoc> =
   (mongoose.models.Enrollment as Model<EnrollmentDoc>) ||
