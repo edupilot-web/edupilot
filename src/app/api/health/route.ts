@@ -9,10 +9,23 @@ import { connectDB } from "@/lib/db";
  * exposed. Safe to delete once a deployment is settled.
  */
 export async function GET() {
+  /**
+   * A database name is not a secret, so echoing it helps. But this route is
+   * public, and a misconfigured value can be anything at all — including a
+   * connection string with the password in it, which is exactly what happened
+   * once. So the value is only echoed when it *is* a plain database name.
+   */
+  const rawDbName = process.env.MONGODB_DB?.trim();
+  const dbNameIsPlain = rawDbName ? /^[A-Za-z0-9_-]{1,63}$/.test(rawDbName) : false;
+
   const env = {
-    MONGODB_URI: Boolean(process.env.MONGODB_URI),
-    MONGODB_DB: process.env.MONGODB_DB ?? "(default: edupilot)",
-    JWT_SECRET: Boolean(process.env.JWT_SECRET),
+    MONGODB_URI: Boolean(process.env.MONGODB_URI?.trim()),
+    MONGODB_DB: !rawDbName
+      ? "(unset — defaults to edupilot)"
+      : dbNameIsPlain
+        ? rawDbName
+        : "(invalid — expected a plain database name such as `edupilot`, not a connection string)",
+    JWT_SECRET: Boolean(process.env.JWT_SECRET?.trim()),
     GOOGLE_CLIENT_ID: Boolean(process.env.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: Boolean(process.env.GOOGLE_CLIENT_SECRET),
   };
