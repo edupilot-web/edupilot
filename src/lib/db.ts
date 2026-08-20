@@ -31,6 +31,11 @@ export async function connectDB(): Promise<typeof mongoose> {
     cached.promise = mongoose.connect(uri, {
       bufferCommands: false,
       dbName: process.env.MONGODB_DB || "edupilot",
+      // The driver default is 30s, which is longer than a serverless function
+      // is allowed to live (10s on Vercel Hobby). Left at the default, an
+      // unreachable cluster kills the invocation before the error surfaces and
+      // the caller sees a dead request instead of a message it can show.
+      serverSelectionTimeoutMS: Number(process.env.MONGODB_TIMEOUT_MS ?? 8000),
     });
   }
 
