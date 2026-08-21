@@ -5,7 +5,7 @@ Living record of what this project is, how it is built, and what is deliberately
 new invariant, new dependency.
 
 - Status: backend complete, no product UI yet
-- Last updated: 2026-08-20
+- Last updated: 2026-08-21
 - Owner: @RajeshKolluri
 - **Per-route documentation lives in [routes/](routes/)** — one file per URL, covering the page or
   handler, its server and client halves, every status it returns, and what about it is not real.
@@ -27,6 +27,7 @@ Scope delivered so far:
 | Capability | State |
 | --- | --- |
 | Email + password accounts, three roles | done |
+| Email verification: hashed single-use tokens, TTL, resend, change address | done |
 | Cookie session (sign in / out / who am I) | done |
 | Course CRUD, ownership enforcement | done |
 | Public catalogue: full-text search, filters, pagination | done |
@@ -34,7 +35,10 @@ Scope delivered so far:
 | Enrollment (idempotent) and per-lesson progress | done |
 | Seed script with demo data | done |
 | Sign-in / sign-up screens | done |
-| Onboarding: profile + education steps, gated on completion | done |
+| Onboarding: education + academic steps, gated on `profileCompleted` | done |
+| College directory with search-as-you-type and free-text fallback | done |
+| Transactional email behind a transport interface (Postal, console) | done — Postal untested against a live server |
+| Server-side rate limiting (verification sends) | done |
 | Continue with Google (OAuth 2.0 / OIDC) | implemented, untested against Google |
 | Signed-in shell: navigation rail, top bar, dashboard | done (dashboard cards show placeholder content) |
 | Social sign-in: Microsoft, Apple | buttons only, no OAuth backend |
@@ -73,12 +77,17 @@ Four layers, each with one job:
 | Transport | `src/app/api/**/route.ts`, [src/lib/auth-actions.ts](../src/lib/auth-actions.ts) | HTTP / action shape, authorization decisions, orchestration |
 | Cross-cutting | [src/lib/](../src/lib/) | connection, session, response envelope, error mapping, schemas |
 | Domain | [src/models/](../src/models/) | schema, indexes, serialization rules |
-| Domain services | [src/lib/accounts.ts](../src/lib/accounts.ts) | account creation and credential checks, shared by both transports |
-| Tooling | [scripts/seed.ts](../scripts/seed.ts) | reproducible local data |
+| Domain services | [src/lib/accounts.ts](../src/lib/accounts.ts), [student-profile.ts](../src/lib/student-profile.ts), [email-verification.ts](../src/lib/email-verification.ts) | account creation, credential checks, profile writes, token lifecycle — shared by both transports |
+| Delivery | [src/lib/email/](../src/lib/email/) | one `sendVerificationEmail()` call site; the provider behind it is swappable |
+| Tooling | [scripts/](../scripts/) | seed data, college directory, index creation, the profile migration |
 
 Sign-up and sign-in exist on two transports — the JSON API and the Server Actions behind the forms.
 Both go through `src/lib/accounts.ts`, so there is exactly one implementation of "create an account"
 and "check a password"; the transports only differ in how they report the outcome.
+
+Where a user is allowed to go next is decided in exactly one function,
+[`destinationFor`](../src/lib/auth-routing.ts) — see §6.5. Every gate calls it rather than
+re-deriving the rule, which is what keeps the redirects from disagreeing.
 
 Business logic lives in the route handler, not in the model. Models stay declarative (fields,
 indexes, `toJSON`) so there are no hidden hooks to reason about.
@@ -162,17 +171,75 @@ partial and cannot introduce a field the create path does not accept. Emails are
 schema so the unique index behaves case-insensitively. `slugify()` strips non-alphanumerics, collapses
 spaces to `-`, and caps at 80 characters.
 
+### 3.5 Email delivery — [src/lib/email/](../src/lib/email/)
+
+Nothing above `emailService.ts` knows which provider sends the mail. Callers ask for a *kind* of
+email:
+
+```ts
+await sendVerificationEmail({ email, name, verificationUrl })
+```
+
+Behind that sit three pieces: `types.ts` declares the `EmailTransport` contract, `postal.ts`
+implements it against [Postal](https://docs.postalserver.io)'s HTTP send API, and
+`templates/` renders subject, HTML and plain text. Replacing Postal with Resend, SES, Mailgun or
+Postmark means adding one file that satisfies `EmailTransport` and naming it in `EMAIL_TRANSPORT` —
+no authentication code changes.
+
+`console.ts` is the third transport and the reason a fresh clone works: with no Postal credentials
+it prints the message and its verification link to the server log instead of sending. It refuses to
+run in production, where silently swallowing verification mail would strand every new account.
+
+Selection order: `EMAIL_TRANSPORT` if set, else Postal when it has credentials, else console.
+
+**A send failure never fails the operation that triggered it.** `sendVerificationEmail` resolves
+with `{ ok: false }` and the caller carries on — see §6.4a for why that is the correct behaviour
+rather than a shortcut.
+
+Links inside email are built with [`absoluteUrl()`](../src/lib/app-url.ts) from
+`NEXT_PUBLIC_APP_URL`, never from the incoming request: the recipient opens the link hours later on
+another machine, where a `localhost` origin captured at send time is a dead link.
+
+### 3.6 Rate limiting — [src/lib/rate-limit.ts](../src/lib/rate-limit.ts)
+
+Fixed windows in a `rateLimits` collection: one upserted document per key holds the counter and its
+own `expiresAt`, which doubles as a TTL so spent windows clean themselves up. Not an in-process Map —
+the app runs as several instances, and a per-process counter resets on every cold start and is
+side-stepped by hitting a different instance.
+
+`consumeRateLimits([...])` applies several rules to one action and counts *every* rule, so tripping
+the short one still registers against the hourly one. Resending a verification email is guarded by
+three:
+
+| Key | Limit | Stops |
+| --- | --- | --- |
+| `verify-email:cooldown:user:<id>` | 1 / minute | double-clicks and impatience |
+| `verify-email:hourly:user:<id>` | 5 / hour | one account mailing itself all day |
+| `verify-email:hourly:address:<email>` | 6 / hour | "change email" being used to bomb a stranger's inbox |
+
+Storage failures **fall open**. A database that cannot serve the counter cannot serve the sign-up
+either, so failing closed would turn one outage into a second, more confusing one.
+
+The disabled button on the client is a courtesy, not a control — the action assumes nobody is using
+the button at all.
+
 ## 4. Data model
 
 ```
-User ──1:N──> Course ──1:N──> Lesson
-  └───────1:N──> Enrollment ──N:1──> Course
+User ──1:1──> StudentProfile ──N:1──> College
+  ├───1:0..1─> EmailVerificationToken        (at most one live at a time)
+  ├───1:N────> Course ──1:N──> Lesson
+  └───1:N────> Enrollment ──N:1──> Course
                     └── completedLessons[] ──> Lesson
 ```
 
 | Model | Fields | Indexes |
 | --- | --- | --- |
-| **User** | `name`, `email`, `passwordHash`, `role` ∈ {student,instructor,admin}, `avatarUrl`, `googleId`, `emailVerified`, `phone`, `city`, `education{college,program,currentYear}`, `onboardingCompletedAt`, timestamps | unique `email`; unique partial `googleId` |
+| **User** | `name`, `email`, `passwordHash`, `authProvider` ∈ {email,google}, `role` ∈ {student,instructor,admin}, `avatarUrl`, `googleId`, `emailVerified`, `phone`, `city`, timestamps | **unique `email`**; unique partial `googleId` |
+| **StudentProfile** | `userId`→User, `collegeId`→College \| null, `collegeName`, `degree` ∈ DEGREES, `specialization`, `studyStatus` ∈ {studying,graduated}, `currentYear` 1–5 \| null, `graduationYear`, `profileCompleted`, timestamps | **unique `userId`** |
+| **EmailVerificationToken** | `userId`→User, `tokenHash`, `expiresAt`, `createdAt` | `userId`; unique `tokenHash`; **TTL on `expiresAt`** |
+| **College** | `name`, `normalizedName`, `city`, `state`, `source` ∈ {seed,user}, timestamps | unique `normalizedName`; compound `{normalizedName:1, name:1}` |
+| **RateLimit** | `key`, `count`, `expiresAt`, `createdAt` | unique `key`; **TTL on `expiresAt`** |
 | **Course** | `title`, `slug`, `description`, `instructor`→User, `level` ∈ {beginner,intermediate,advanced}, `tags[]`, `price`, `coverImageUrl`, `published`, `lessonCount`, timestamps | unique `slug`; `instructor`; `published`; text index on `title`+`description`+`tags` |
 | **Lesson** | `course`→Course, `title`, `content`, `videoUrl`, `durationMinutes`, `order`, `isFreePreview`, timestamps | compound `{course:1, order:1}` |
 | **Enrollment** | `student`→User, `course`→Course, `completedLessons[]`→Lesson, `progress` 0–100, `completedAt`, timestamps | **unique compound `{student:1, course:1}`** |
@@ -183,6 +250,25 @@ through a route that forgets one.
 
 `passwordHash` is required only when `googleId` is absent, so a Google account can exist without one.
 `authenticate()` treats a missing hash as a failed sign-in rather than comparing against `undefined`.
+
+**The verification token is stored as a SHA-256 hash, never in the clear.** A database dump is
+therefore useless for verifying anyone's address: the value that goes in the email cannot be
+recovered from the value that goes in the row. SHA-256 without a salt or a work factor is the right
+primitive here and not a shortcut — the input is already 32 bytes of `randomBytes`, so there is no
+low-entropy secret for a slow hash to protect.
+
+Both TTL indexes are **housekeeping, not enforcement**. `mongod` sweeps on its own schedule, so
+`verifyEmailToken()` compares `expiresAt` itself rather than assuming an expired row is already gone.
+
+`StudentProfile` is its own collection rather than a sub-document because it is written by a
+different flow, read by the personalisation code, and will grow fields (CGPA, backlogs, semester)
+that have nothing to do with signing in. The unique `userId` is what guarantees one profile per
+person — including the Google-links-to-existing-account case, which resolves to one `User` row and
+therefore one profile.
+
+`College.normalizedName` (lower-cased, punctuation stripped) is what makes the directory
+self-healing: "St. Xavier's" and "St Xaviers" collapse to one row, so two students typing the same
+institution differently cannot create two entries.
 
 The `googleId` index is **partial** (`{ googleId: { $type: "string" } }`) rather than sparse: a sparse
 unique index still treats an explicit `null` as a value, so the second password-only account would
@@ -197,14 +283,23 @@ nothing. That failure mode cost real debugging time; the reset is cheaper than r
 
 ### Invariants the code maintains
 
-1. **One enrollment per (student, course)** — enforced by the unique index; POST also returns the
+1. **One student profile per user** — the unique `userId` index; every write is an upsert on it, so
+   a resumed or repeated onboarding step updates the row rather than adding one.
+2. **`profileCompleted` is derived, never asserted.** Both step writers recompute it from the merged
+   document with [`isProfileComplete()`](../src/models/StudentProfile.ts), so the flag cannot drift
+   from the fields it summarises. A graduate needs no `currentYear`; a student does.
+3. **At most one live verification token per user** — `issueVerificationToken()` deletes the
+   outstanding ones before inserting, so a resend invalidates the previous link.
+4. **Verification tokens are single-use** — the row is deleted before `emailVerified` is set, so a
+   crash between the two leaves a dead link rather than a reusable one.
+5. **One enrollment per (student, course)** — enforced by the unique index; POST also returns the
    existing row instead of erroring, making enroll idempotent.
-2. **Unique slug** — generated from the title, then `-2`, `-3`… until free; the unique index is the
+6. **Unique slug** — generated from the title, then `-2`, `-3`… until free; the unique index is the
    real guarantee and a lost race surfaces as 409.
-3. **`Course.lessonCount` tracks lesson rows** — `$inc` on lesson create and delete.
-4. **No orphans** — deleting a course cascades to its lessons and enrollments; a deleted lesson is
+7. **`Course.lessonCount` tracks lesson rows** — `$inc` on lesson create and delete.
+8. **No orphans** — deleting a course cascades to its lessons and enrollments; a deleted lesson is
    `$pull`ed from every enrollment's `completedLessons`.
-5. **`progress` = round(completed ÷ total lessons × 100)**, recomputed on every progress write;
+9. **`progress` = round(completed ÷ total lessons × 100)**, recomputed on every progress write;
    `completedAt` is set exactly when progress hits 100 and cleared otherwise.
 
 ## 5. API surface
@@ -216,10 +311,12 @@ Per-endpoint reference lives in [routes/api/](routes/api/); a quick table is in
 | Route | Method | Who may call it | Rule enforced by |
 | --- | --- | --- | --- |
 | `/api/auth/register`, `/api/auth/login` | POST | public | — |
+| `/verify-email?token=` | GET (page) | public | the token *is* the credential: hashed, compared, expiry-checked, then deleted |
 | `/api/auth/logout` | POST | anyone | — |
 | `/api/auth/google/start` | GET | public | mints state+nonce into an httpOnly cookie |
 | `/api/auth/google/callback` | GET | public | state must match the cookie; id_token verified against Google's JWKS |
 | `/api/auth/me` | GET | authenticated | `requireAuth` |
+| `/api/colleges/search` | GET | authenticated | `requireAuth` — it runs a regex query per keystroke, so it is not left open |
 | `/api/courses` | GET | public | filter pinned to `published: true` |
 | `/api/courses` | POST | instructor, admin | `requireRole` |
 | `/api/courses/:idOrSlug` | GET | public | — |
@@ -300,9 +397,15 @@ authenticate() / createAccount() → src/lib/accounts.ts
       ▼
 startSession(...)                → sets edupilot_session
       │
+      ├─ sign-up only: sendVerification(...)   → link mailed, failure tolerated
+      │
       ▼
-redirect(safeDestination(next))  → /dashboard
+destinationFor(user, next)       → /verify-email | /onboarding/education | next
 ```
+
+Sign-up no longer lands on the dashboard or on onboarding. It lands on `/verify-email`, because an
+unconfirmed address is the first thing that has to be resolved (§6.4a). Sign-in asks the same
+`destinationFor`, so an account abandoned at any point resumes exactly where it stopped.
 
 Both forms work without client JS, hold their fields in state so a failed attempt does not clear
 them, and never reveal which half of a credential pair was wrong. The reasoning for each is in
@@ -311,42 +414,100 @@ them, and never reveal which half of a credential pair was wrong. The reasoning 
 
 ### 6.4 Onboarding — `src/app/(onboarding)/`
 
-The flow the product asked for:
+Sign-up creates the **account**; onboarding collects the **student**. The two are kept apart on
+purpose — a sign-up form asking for a college is a form people abandon.
 
 ```
-SIGN UP ──┬── email + password ──┐
-          └── Continue with Google ──┤
-                                     ▼
-                            ACCOUNT CREATED (session set)
-                                     ▼
-                        /onboarding/profile   name, phone, city
-                                     ▼
-                      /onboarding/education   college, program, current year
-                                     ▼
-                          onboardingCompletedAt = now
-                                     ▼
-                                  /dashboard
+SIGN UP ──┬── email + password ──► /verify-email  (§6.4a)
+          │                              │ link followed
+          └── Continue with Google ──────┤ (already verified — no link)
+                                         ▼
+                     /onboarding/education    Step 1 of 2
+                       college (searchable), degree, specialization
+                                         ▼
+                     /onboarding/academic     Step 2 of 2
+                       currently studying / graduated
+                       current year (studying only), graduation year
+                                         ▼
+                          profileCompleted = true
+                                         ▼
+                     /onboarding/complete     "You're all set 🎉"
+                                         ▼
+                                    /dashboard
 ```
 
-`onboardingCompletedAt` is the single source of truth, and it is set by the **education** step —
-the last one — so there is no way to be half-onboarded with the flag already set.
+`profileCompleted` on the student profile is the single source of truth, and it is **derived**
+(§4, invariant 2) rather than set by whichever step ran last.
 
-Two gates keep the states from overlapping:
+**College is a searchable autocomplete over the `colleges` collection, and free text is always
+accepted.** Typing "andhra" offers Andhra University and Andhra Loyola College; a college that is
+not there is saved as typed *and added to the directory* as `source: "user"`, so the next student
+searching for it finds it. This is the one field where forcing a choice would be actively harmful —
+a student who cannot find their college would have to name a different one, and the data would look
+correct while being wrong. `resolveCollege()` re-reads any submitted `collegeId` and accepts it only
+when it still carries the displayed name, so a tampered form cannot pin an arbitrary label to a real
+institution.
 
-| Layout | Condition | Sends you to |
-| --- | --- | --- |
-| `(app)` | signed in, `onboardingCompletedAt` null | `/onboarding/profile` |
-| `(onboarding)` | signed in, `onboardingCompletedAt` set | `/dashboard` |
+Specialization works the same way with a local suggestion list: branch names differ far too much
+between universities to enumerate.
 
-Because the conditions are exact complements they cannot ping-pong. This also means an abandoned
-sign-up resumes where it left off instead of reaching the app with no education details, and a
-completed user cannot reopen a bookmarked step and overwrite their profile.
+**Step 2 branches on status rather than adding "Graduated" to the year list.** A graduate has no
+current year, and their graduation year is a fact rather than an estimate — so the year selector
+offers future years while studying and past ones after graduating, instead of every year from 1950
+to 2034. Switching to "Graduated" clears `currentYear` server-side too, so the stale value cannot
+survive a hand-edited form.
 
-A `?next=` from sign-up is threaded through both steps and consumed when the education step
-completes, so a deep link survives onboarding rather than being dropped at the door.
+Optional profile content — photo, bio, skills, interests, LinkedIn, GitHub, résumé — is deliberately
+**not** in onboarding. Two steps is the whole flow; everything else belongs on the profile screen.
+
+A `?next=` is threaded through both steps and consumed at the end, so a deep link survives
+onboarding rather than being dropped at the door.
 
 Onboarding lives outside the app shell — no sidebar, since the user is not in the app yet — and its
-own header offers Sign out, which is the only way out of the flow.
+own header offers Sign out.
+
+### 6.4a Email verification — `/verify-email`
+
+One route with two jobs, which is what makes a redirect loop impossible: there is no second page
+that could disagree about whether the address is confirmed.
+
+- **With `?token=`** it is the endpoint the emailed link points at.
+- **Without one** it is the "check your email" screen sign-up lands on.
+
+The token lifecycle ([email-verification.ts](../src/lib/email-verification.ts)):
+
+1. 32 bytes from `crypto.randomBytes`, hex encoded — 256 bits in the link.
+2. Any outstanding token for that user is deleted, then the **SHA-256 hash** is stored with an
+   `expiresAt` (`EMAIL_VERIFICATION_TTL_MINUTES`, default 60).
+3. Following the link: shape-check the value, hash it, look up the row, compare in constant time,
+   check the expiry, confirm the user exists, delete the row, set `emailVerified`.
+
+Four outcomes, four different screens:
+
+| Outcome | Shown | Way out |
+| --- | --- | --- |
+| valid | redirect straight into onboarding, or "Email verified 🎉" if the link was opened in another browser | continue |
+| already verified | the same success screen — following a link twice is not an error | continue |
+| expired | "Your verification link has expired" | send a new one |
+| invalid / used / unknown | "This verification link is invalid or has already been used" | sign in, then resend |
+
+Used, expired-and-swept, and never-valid all report **invalid** in the same words. Distinguishing
+them would tell whoever is holding the link something about the account behind it.
+
+The check-your-email screen offers **Resend email**, **Change email** and **Back to login**. Change
+is available only while the address is unverified — there is nothing of value behind an address
+nobody has confirmed, which is exactly what stops it being an account-takeover primitive. It drops
+any outstanding token, since that one was minted for the old address.
+
+**Delivery failure is a supported state, not an error path.** If the account is created and the mail
+does not go out, the user exists with `emailVerified: false` — a legitimate resting state — and the
+answer is "Resend email", not a second sign-up. This is the reason `sendVerificationEmail` resolves
+`{ ok: false }` instead of throwing, and the reason sign-up does not roll back the account.
+
+Google accounts skip all of this: the provider has established the identity, so the account is
+created with `emailVerified: true` and goes straight to onboarding. The exception is a Google
+account whose own `email_verified` claim came back **false** — the one address we should not take
+Google's word for — which is sent a link like any other.
 
 #### Continue with Google
 
@@ -360,18 +521,53 @@ Real OAuth 2.0 / OpenID Connect, not a stub:
 3. `findOrCreateGoogleUser()` matches on `googleId`, then on email **only when Google says the
    address is verified** — otherwise anyone able to create a Google address for `someone@example.com`
    could claim that EduPilot account.
-4. New (or unfinished) accounts land in onboarding with the Google name and picture prefilled;
-   finished ones go straight to their destination.
+4. Where they land is `destinationFor`'s decision, same as every other path: onboarding for a new
+   or unfinished account (with the Google name and picture already on the row), their destination if
+   they are finished.
+
+**Linking, not duplicating.** Someone who signed up with a password at `user@gmail.com` and later
+presses Continue with Google is matched to that same row and the `googleId` is attached — one
+`User`, therefore one `StudentProfile`, and no collision on the unique email index. Their
+`authProvider` stays `email`, because the password still works and calling it a Google account
+would hide that. If the address was still unconfirmed, Google's verification settles it and the
+outstanding token is dropped.
 
 Credentials come from `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. With them unset the button
 redirects back to `/login?error=google-unavailable` and the page explains it is not configured, which
 is why the flow degrades rather than 500s on a deployment without Google set up.
 
-### 6.5 Route protection — [src/proxy.ts](../src/proxy.ts)
+### 6.5 Route protection — [proxy.ts](../src/proxy.ts) and [auth-routing.ts](../src/lib/auth-routing.ts)
 
-`proxy.ts` (Next 16's renamed middleware) redirects any signed-in path to `/login?next=…` when the
-session **cookie is absent**. That is an optimistic check only — it never verifies the JWT. The
-`(app)` layout does, and is the authority.
+Three layers, each doing strictly less than the one below it:
+
+| Layer | Checks | Trusts |
+| --- | --- | --- |
+| `proxy.ts` | is a session cookie *present* | nothing — optimistic routing only |
+| `(app)` / `(onboarding)` layouts | verified JWT, then `appGateRedirect(user)` | the layout is the authority |
+| Server Actions | `getCurrentUser()` again, at the top of every write | nothing the layout did |
+
+The third layer is not redundant. A Server Action is a public endpoint reachable with nothing but a
+session cookie; the layout that rendered the form is not in the request path when the action runs.
+
+**The ordering rule lives in one function.** [`destinationFor`](../src/lib/auth-routing.ts):
+
+```
+unverified address      → /verify-email
+incomplete profile      → /onboarding/education
+otherwise               → safeDestination(next) ?? /dashboard
+```
+
+Sign-in, sign-up, the Google callback, `/verify-email`, and the `(app)` layout all call it. That is
+the whole loop-prevention argument: two gates each holding their own copy of "verified? onboarded?"
+is exactly how a ping-pong starts, and there is only one copy.
+
+The `(onboarding)` layout deliberately checks **only** session and verification. Whether the profile
+is finished means opposite things on a step page ("you are done, go to the dashboard") and on
+`/onboarding/complete` ("you are done, that is why you are here"), so each page decides for itself —
+had the layout decided, the completion screen would bounce itself.
+
+`proxy.ts` never verifies the JWT, only that a cookie exists. The `(app)` layout does, and is the
+authority.
 
 The path list lives in [app-routes.ts](../src/lib/app-routes.ts) so the proxy and the sidebar cannot
 disagree. `config.matcher` still repeats it literally: Next requires the matcher to be statically
@@ -427,25 +623,62 @@ Required env (see [.env.example](../.env.example)); the app throws a named error
 | `MONGODB_URI` | `mongodb://127.0.0.1:27017` locally, `mongodb+srv://…` for Atlas |
 | `MONGODB_DB` | database name, defaults to `edupilot` |
 | `JWT_SECRET` | HS256 signing key — long random string, rotate per environment |
+| `NEXT_PUBLIC_APP_URL` | public origin used to build links inside email; no trailing slash |
 | `GOOGLE_CLIENT_ID` | optional; OAuth client for "Continue with Google" |
 | `GOOGLE_CLIENT_SECRET` | optional; leave both unset to run without Google |
+| `EMAIL_TRANSPORT` | `postal` or `console`; unset auto-selects (Postal if configured, else console) |
+| `POSTAL_API_URL` | Postal origin only, no path — the client appends `/api/v1/send/message` |
+| `POSTAL_API_KEY` | a Postal **server** API key, sent as `X-Server-API-Key` |
+| `EMAIL_FROM`, `EMAIL_FROM_NAME` | From header; the domain must be one Postal may send for |
+| `EMAIL_VERIFICATION_TTL_MINUTES` | optional; link lifetime, default 60, capped at 1440 |
+| `MONGODB_AUTO_INDEX` | optional override; defaults on outside production, off in it |
 
 ```bash
 cp .env.example .env.local
-npm run seed      # wipes and reseeds: 1 instructor, 1 student, 1 course, 3 lessons, 1 enrollment
+npm run seed:colleges   # 132 institutions — idempotent, safe to re-run
+npm run seed            # wipes and reseeds users, courses, lessons, enrollments
 npm run dev
 ```
 
-`npm run seed` is **destructive** — it runs `deleteMany({})` on all four collections. Never point it at
-a shared database. Seed logins: `ada@edupilot.dev` (instructor), `sam@edupilot.dev` (student),
-password `password123`.
+`npm run seed` is **destructive** — it clears users, student profiles, verification tokens, courses,
+lessons and enrollments. It leaves `colleges` alone, which is shared reference data rather than demo
+content. Never point it at a shared database. Seed logins: `ada@edupilot.dev` (instructor),
+`sam@edupilot.dev` (student), password `password123`; both are seeded verified with completed
+profiles, so they land on the dashboard.
+
+| Script | When |
+| --- | --- |
+| `npm run seed:colleges` | once per environment, and after editing the curated list |
+| `npm run ensure-indexes` | **production, after every schema change** — `autoIndex` is off there |
+| `npm run migrate:profiles` | once, on a database predating the `studentProfiles` collection |
+
+`npm run migrate:profiles` moves the old embedded `users.education` into `studentProfiles` and
+backfills `authProvider`. It is idempotent and non-destructive; re-run it with `-- --drop-legacy`
+once you have checked the result to remove the old fields. It reads through the raw driver, because
+the User model no longer declares those paths and Mongoose would strip them from the result.
 
 Other scripts: `npm run build`, `npm start`, `npm run typecheck` (`tsc --noEmit`), `npm run lint`.
 
-Page routes: `/login`, `/signup`, `/forgot-password`, `/terms`, `/privacy` are public; `/onboarding/*`,
-`/dashboard` and the thirteen other paths in [app-routes.ts](../src/lib/app-routes.ts) need a session.
-The seeded accounts are marked onboarded, so signing in as one goes straight to the dashboard; sign up
-a new account to walk the onboarding flow.
+### Testing the email flow locally
+
+With `EMAIL_TRANSPORT=console` (the default without Postal credentials) the verification link is
+printed to the dev server log — `.next/dev/logs/next-development.log`, or the terminal running
+`npm run dev`. Sign up, copy the `Link:` line, open it.
+
+### Pointing it at Postal
+
+1. In the Postal console, add the sending domain and publish the SPF, DKIM and return-path records
+   it gives you. Mail from an unauthenticated domain is filed as spam.
+2. Create a mail server, then **Credentials → New credential → type API**. That key is
+   `POSTAL_API_KEY`; it is scoped to that one mail server.
+3. `POSTAL_API_URL` is the console origin with no path, e.g. `https://postal.example.com`.
+4. Set `EMAIL_FROM` to an address on the verified domain, and `EMAIL_TRANSPORT=postal` (or leave it
+   unset — Postal is picked automatically once both credentials are present).
+
+Page routes: `/login`, `/signup`, `/verify-email`, `/forgot-password`, `/terms`, `/privacy` are
+public; `/onboarding/*`, `/dashboard` and the thirteen other paths in
+[app-routes.ts](../src/lib/app-routes.ts) need a session. `/verify-email` is public because the link
+is opened wherever the mail was read, which is often not the browser that signed up.
 
 The Google redirect URI to register in the Google Cloud console is
 `http://localhost:3000/api/auth/google/callback` (and the same path on any deployed origin — it is
@@ -488,26 +721,37 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
    are readable by anyone with a course id. That defeats the enrolment gate on
    `GET /api/lessons/:id`. See
    [routes/api/courses-id-lessons.md](routes/api/courses-id-lessons.md#gap--this-bypasses-the-lesson-paywall).
-9. No rate limiting or lockout anywhere — `/api/auth/login` is brute-forceable.
+9. Rate limiting exists ([rate-limit.ts](../src/lib/rate-limit.ts)) but is only applied to
+   verification sends. **`/api/auth/login` is still brute-forceable** — the limiter is generic, so
+   closing this is a matter of adding two keys to the login path, not new infrastructure.
 10. Logout only clears the cookie. The JWT stays valid until `exp`, so a stolen token cannot be
    revoked, and a role or password change does not invalidate live sessions. Fixing this means a
    token version / denylist or server-side sessions.
 11. No CSRF token. `sameSite=lax` blocks cross-site POSTs from forms and fetch, which covers the
    common case, but it is the only defence.
-12. No email verification, no password reset, no audit log. `/forgot-password` is a placeholder that
-    says so (§6.5).
+12. No password reset and no audit log. `/forgot-password` is a placeholder that says so. Email
+    verification is now implemented (§6.4a); password reset should reuse the same hashed-token
+    machinery rather than growing a second copy of it.
+13. **The verification link is consumed on `GET`.** A mail scanner that prefetches links will spend
+    the token before the student clicks, who then sees "invalid" and has to resend. The alternative —
+    a landing page with a Confirm button — costs every user a click to protect against some. Worth
+    revisiting if it shows up in support traffic.
+14. Postal is implemented against its documented HTTP API but has **not been exercised against a
+    live server**. The console transport is what has been tested end to end.
+15. The rate limiter uses fixed windows, so a burst straddling a boundary can reach 2x the limit.
+    Acceptable for "do not flood a mailbox"; not acceptable if it is ever reused to meter an API.
 
 **Product / engineering**
 
-13. **No tests and no CI.** Nothing prevents a regression in the authorization rules above.
-14. UI covers sign-in, sign-up and the dashboard (§6). Thirteen sidebar destinations are placeholders,
+16. **No tests and no CI.** Nothing prevents a regression in the authorization rules above.
+17. UI covers sign-in, sign-up, verification, onboarding and the dashboard (§6). Thirteen sidebar destinations are placeholders,
     the dashboard cards show static content (§6.5), and there is still no way to reach the
     instructor-only endpoints from a browser.
-15. `price` is stored and ignored; enrollment is free regardless. No payment integration.
-16. No file or video upload — `videoUrl` and `coverImageUrl` are bare URL strings.
-17. Deep pagination uses `skip`/`limit`, which degrades on large offsets; `?q=` depends on the text
+18. `price` is stored and ignored; enrollment is free regardless. No payment integration.
+19. No file or video upload — `videoUrl` and `coverImageUrl` are bare URL strings.
+20. Deep pagination uses `skip`/`limit`, which degrades on large offsets; `?q=` depends on the text
     index and, as written, cannot combine with relevance sorting.
-18. No structured logging, metrics, or health endpoint; `console.error` is the whole story.
+21. No structured logging, metrics, or health endpoint; `console.error` is the whole story.
 
 ## 9. Next steps
 
@@ -518,11 +762,14 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
    `/api-reference`.
 3. Fix §8 items 1–3: published gate on course detail, progress recompute on lesson delete, numeric
    query-param guards.
-4. Login rate limiting.
-5. Product UI: catalogue → course detail → lesson player with progress; then wire the dashboard's
+4. Login rate limiting — the limiter is built (§3.6); apply it to `/api/auth/login`.
+5. Password reset, reusing the token machinery from §6.4a.
+6. The profile screen: photo, bio, skills, interests, LinkedIn, GitHub, résumé — the fields
+   deliberately kept out of onboarding, plus phone and city.
+7. Product UI: catalogue → course detail → lesson player with progress; then wire the dashboard's
    Curriculum card to `GET /api/enrollments`, which already returns per-course progress.
-6. Instructor surface: draft/publish flow, lesson reordering endpoint.
-7. Payments, if `price` is to mean anything.
+8. Instructor surface: draft/publish flow, lesson reordering endpoint.
+9. Payments, if `price` is to mean anything.
 
 ## 10. Document conventions
 

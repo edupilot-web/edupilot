@@ -1,7 +1,8 @@
 import bcrypt from "bcryptjs";
 import type { HydratedDocument } from "mongoose";
 import { connectDB } from "@/lib/db";
-import { User, type UserDoc, type Role, type Program } from "@/models/User";
+import { EmailVerificationToken } from "@/models/EmailVerificationToken";
+import { User, type UserDoc, type Role } from "@/models/User";
 
 const BCRYPT_ROUNDS = 12;
 
@@ -17,8 +18,14 @@ export type AccountResult =
   | { ok: false; reason: "email-taken" | "invalid-credentials" };
 
 /**
- * Creates a user with a hashed password. Callers must have validated `input`
- * already (see registerSchema / signupFormSchema).
+ * Creates a password account. Callers must have validated `input` already
+ * (see registerSchema / signupFormSchema).
+ *
+ * The address starts unverified: proving it belongs to the person signing up
+ * is the job of the link mailed straight after this returns. An account that
+ * exists with `emailVerified: false` is a legitimate resting state, not a
+ * half-finished write — which is what lets a failed send be recovered with
+ * "resend" instead of a second sign-up.
  */
 export async function createAccount(input: {
   name: string;
@@ -37,15 +44,15 @@ export async function createAccount(input: {
       name: input.name,
       email: input.email,
       passwordHash,
+      authProvider: "email",
+      emailVerified: false,
       role: input.role ?? "student",
     });
     return { ok: true, user };
   } catch (err) {
     // The unique index is the real guard: two simultaneous sign-ups can both
     // pass the findOne above, and only one of them can win the insert.
-    if (typeof err === "object" && err !== null && (err as { code?: number }).code === 11000) {
-      return { ok: false, reason: "email-taken" };
-    }
+    if (isDuplicateKey(err)) return { ok: false, reason: "email-taken" };
     throw err;
   }
 }
@@ -54,6 +61,10 @@ export async function createAccount(input: {
  * Verifies an email/password pair. Returns the same `invalid-credentials`
  * reason whether the email is unknown or the password is wrong, so neither
  * caller can leak which emails have accounts.
+ *
+ * An unverified address is *not* a reason to refuse. Signing in is how the
+ * user reaches the screen that resends the link; blocking it here would leave
+ * anyone whose first email went astray with no way back in.
  */
 export async function authenticate(input: {
   email: string;
@@ -79,9 +90,10 @@ export async function authenticate(input: {
  *
  * Matching is by `googleId` first, then by verified email so that someone who
  * signed up with a password and later uses "Continue with Google" lands on the
- * same account rather than hitting the unique-email index. Linking on an
- * *unverified* Google email is deliberately not done — that would let anyone
- * who can create a Google address claim an existing EduPilot account.
+ * same account rather than hitting the unique-email index — one person, one
+ * user row, and therefore one student profile. Linking on an *unverified*
+ * Google email is deliberately not done: that would let anyone who can create
+ * a Google address claim an existing EduPilot account.
  */
 export async function findOrCreateGoogleUser(profile: {
   googleId: string;
@@ -107,8 +119,15 @@ export async function findOrCreateGoogleUser(profile: {
     const existingByEmail = await User.findOne({ email: profile.email });
     if (existingByEmail) {
       existingByEmail.googleId = profile.googleId;
-      existingByEmail.emailVerified = true;
       existingByEmail.avatarUrl = existingByEmail.avatarUrl ?? profile.avatarUrl ?? null;
+      // Google has just vouched for an address this account was still being
+      // asked to confirm, so any outstanding link is now moot.
+      if (!existingByEmail.emailVerified) {
+        existingByEmail.emailVerified = true;
+        await EmailVerificationToken.deleteMany({ userId: existingByEmail._id });
+      }
+      // `authProvider` stays as it was. The password still works, and calling
+      // this a Google account would hide that from the profile screen.
       await existingByEmail.save();
       return { user: existingByEmail, created: false };
     }
@@ -118,6 +137,9 @@ export async function findOrCreateGoogleUser(profile: {
     name: profile.name,
     email: profile.email,
     googleId: profile.googleId,
+    authProvider: "google",
+    // Google's own `email_verified` claim, not an assumption. A Workspace
+    // account with an unconfirmed alias comes through as false.
     emailVerified: profile.emailVerified,
     avatarUrl: profile.avatarUrl ?? null,
     role: "student",
@@ -125,31 +147,44 @@ export async function findOrCreateGoogleUser(profile: {
   return { user, created: true };
 }
 
-/** Saves onboarding step 1. */
-export async function saveProfileDetails(
-  userId: string,
-  details: { name: string; phone: string | null; city: string | null }
-): Promise<UserDocument | null> {
-  await connectDB();
-  return User.findByIdAndUpdate(
-    userId,
-    { name: details.name, phone: details.phone, city: details.city },
-    { returnDocument: "after", runValidators: true }
-  );
-}
+export type ChangeEmailResult =
+  | { ok: true; user: UserDocument }
+  | { ok: false; reason: "email-taken" | "not-allowed" | "not-found" };
 
 /**
- * Saves onboarding step 2 and marks onboarding done — the education step is the
- * last one, so completion is recorded here rather than tracked as its own flag.
+ * Corrects the address on an account that has not been verified yet — the
+ * "wrong email?" escape hatch on the check-your-inbox screen.
+ *
+ * Only ever available while `emailVerified` is false, so it cannot be used to
+ * move a live account onto an attacker's address. Outstanding tokens are
+ * dropped: they were minted for the old address and must not verify the new one.
  */
-export async function saveEducationDetails(
+export async function changeUnverifiedEmail(
   userId: string,
-  education: { college: string; program: Program; currentYear: number }
-): Promise<UserDocument | null> {
+  email: string
+): Promise<ChangeEmailResult> {
   await connectDB();
-  return User.findByIdAndUpdate(
-    userId,
-    { education, onboardingCompletedAt: new Date() },
-    { returnDocument: "after", runValidators: true }
-  );
+
+  const user = await User.findById(userId);
+  if (!user) return { ok: false, reason: "not-found" };
+  if (user.emailVerified) return { ok: false, reason: "not-allowed" };
+  if (user.email === email) return { ok: true, user };
+
+  const taken = await User.findOne({ email }).select("_id").lean();
+  if (taken) return { ok: false, reason: "email-taken" };
+
+  user.email = email;
+  try {
+    await user.save();
+  } catch (err) {
+    if (isDuplicateKey(err)) return { ok: false, reason: "email-taken" };
+    throw err;
+  }
+
+  await EmailVerificationToken.deleteMany({ userId: user._id });
+  return { ok: true, user };
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: number }).code === 11000;
 }

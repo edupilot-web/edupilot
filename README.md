@@ -30,6 +30,7 @@ Documentation, and keep it updated alongside any behaviour change:
 
 ```bash
 cp .env.example .env.local   # then fill in the values
+npm run seed:colleges        # college directory for the onboarding autocomplete
 npm run seed                 # optional: demo instructor, student, course, lessons
 npm run dev                  # http://localhost:3000
 ```
@@ -41,9 +42,20 @@ MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DB=edupilot
 JWT_SECRET=<long random string>
 
+# Used to build links inside verification emails. No trailing slash.
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
 # Optional — enables "Continue with Google"
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
+
+# Email. Leave the Postal values blank for local work: the console transport
+# then prints each message, and its verification link, to the dev server log.
+EMAIL_TRANSPORT=console
+POSTAL_API_URL=
+POSTAL_API_KEY=
+EMAIL_FROM=no-reply@example.com
+EMAIL_FROM_NAME=EduPilot
 ```
 
 Generate a secret with:
@@ -70,18 +82,30 @@ Per-page detail — composition, server/client split, states, gaps — in
 | --------------------- | ------------- | ------------------------------------------------------ |
 | `/`                   | public        | Marketing hero; most header links are not built yet    |
 | `/login`              | public        | Sign in; "Remember me" extends the session to 30 days  |
-| `/signup`             | public        | Create an account, then straight to the dashboard      |
-| `/onboarding/profile` | session       | Onboarding step 1 — name, phone, city                   |
-| `/onboarding/education` | session     | Onboarding step 2 — college, program, current year      |
+| `/signup`             | public        | Create an account, then confirm the address            |
+| `/verify-email`       | public        | Check-your-inbox screen, and the target of the emailed link |
+| `/onboarding/education` | session     | Step 1 of 2 — college (searchable), degree, specialization |
+| `/onboarding/academic` | session      | Step 2 of 2 — studying/graduated, current year, graduation year |
+| `/onboarding/complete` | session      | "You're all set 🎉" with a summary of what was saved   |
 | `/dashboard`          | session       | Greeting plus six cards, inside the app shell           |
 | 13 more app routes    | session       | Sidebar destinations, each a "not built yet" placeholder |
 | `/forgot-password`    | public        | Placeholder — no reset flow exists yet                 |
 | `/terms`, `/privacy`  | public        | Placeholders the sign-up consent copy links to         |
 | `/api-reference`      | public        | The endpoint list below, rendered                      |
 
-New accounts go **sign up → profile → education → dashboard**. `onboardingCompletedAt` on the user is
-the gate: the app redirects to onboarding until it is set, and onboarding redirects to the dashboard
-once it is, so an abandoned sign-up resumes and a finished user cannot reopen the steps.
+New accounts go **sign up → verify email → education → academic → dashboard**. Google accounts skip
+the verification step, because the provider has already established the address.
+
+Where a signed-in user is allowed to go is decided by one function,
+[`destinationFor`](src/lib/auth-routing.ts): unverified address → `/verify-email`, incomplete
+profile → `/onboarding/education`, otherwise wherever they were headed. Sign-in, sign-up, the Google
+callback and the app shell all call it, so an abandoned sign-up resumes exactly where it stopped, a
+finished user cannot reopen the steps, and no two gates can disagree and loop.
+
+Verification links carry a 256-bit token; only its SHA-256 hash is stored, it expires after an hour
+(`EMAIL_VERIFICATION_TTL_MINUTES`), and it is deleted the moment it is used. Resends are rate limited
+server-side. If the email fails to send, the account still exists — unverified is a valid state, and
+"Resend email" is the way forward rather than signing up again.
 
 "Continue with Google" is a real OAuth 2.0 / OpenID Connect flow (state + nonce, `id_token` verified
 against Google's JWKS). Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to enable it and register
@@ -111,6 +135,9 @@ same rule, so the API cannot accept a password the form would reject.
 | `npm run build`     | Production build                         |
 | `npm start`         | Serve the production build               |
 | `npm run seed`      | Wipe and reseed the database with demo data |
+| `npm run seed:colleges` | Upsert the curated college directory (idempotent) |
+| `npm run ensure-indexes` | Create every declared index — run this in production, where `autoIndex` is off |
+| `npm run migrate:profiles` | One-off: move embedded `education` into `studentProfiles` |
 | `npm run typecheck` | `tsc --noEmit`                           |
 | `npm run lint`      | ESLint                                   |
 
@@ -133,10 +160,10 @@ src/
       signup/page.tsx     sign-up screen
       forgot-password, terms, privacy   placeholder pages
     (onboarding)/
-      layout.tsx          session gate, redirects once onboarding is done
-      onboarding/profile, onboarding/education
+      layout.tsx          session + email-verification gate, no sidebar
+      onboarding/education, onboarding/academic, onboarding/complete
     (app)/
-      layout.tsx          session gate + onboarding gate + app shell
+      layout.tsx          session + verification + profile gate, then the app shell
       dashboard/page.tsx  the dashboard
       ai-tutor, timetable, wallet, ...  13 placeholder screens
   components/
@@ -154,7 +181,14 @@ src/
     app-routes.ts         the signed-in path list (shared with proxy.ts)
     current-user.ts       request-cached session user
     google-oauth.ts       authorize URL, token exchange, id_token verification
+    auth-routing.ts       destinationFor() — the one place the redirect order is defined
     onboarding-actions.ts Server Actions for the two onboarding steps
+    verification-actions.ts resend and change-email actions
+    email-verification.ts token lifecycle: issue, verify, resend, rate limit
+    email/                emailService.ts + postal.ts + console.ts + templates/
+    student-profile.ts    reads and writes studentProfiles
+    colleges.ts           the autocomplete query
+    rate-limit.ts         fixed-window counters in Mongo
     user-fields.ts        roles, programs, study years (no mongoose import)
     dashboard-data.ts     placeholder card content
   models/
@@ -181,7 +215,8 @@ handler performs, and its gaps — are in [docs/routes/api/](docs/routes/api/).
 | GET    | `/api/auth/google/start` | public | Redirects to Google's consent screen |
 | GET    | `/api/auth/google/callback` | public | Verifies the `id_token`, then signs in |
 | POST   | `/api/auth/logout`   | any    | Clears the session cookie          |
-| GET    | `/api/auth/me`       | auth   | Current user                       |
+| GET    | `/api/auth/me`       | auth   | Current user, student profile, and both gate flags |
+| GET    | `/api/colleges/search?q=` | auth | College autocomplete for onboarding |
 
 ### Courses
 
@@ -223,7 +258,11 @@ curl -b jar.txt localhost:3000/api/enrollments
 
 ## Data model
 
-- **User** — `name`, `email` (unique), `passwordHash` (never serialized), `role` ∈ student/instructor/admin.
+- **User** — `name`, `email` (unique), `passwordHash` (never serialized), `authProvider` ∈ email/google, `emailVerified`, `role` ∈ student/instructor/admin.
+- **StudentProfile** — `userId` → User (**unique**, one profile per person), `collegeId` → College, `collegeName`, `degree`, `specialization`, `studyStatus`, `currentYear`, `graduationYear`, `profileCompleted`.
+- **EmailVerificationToken** — `userId` → User, `tokenHash` (SHA-256, never the raw token), `expiresAt` with a **TTL index**.
+- **College** — `name`, `normalizedName` (unique), `city`, `state`, `source` ∈ seed/user. Seeded, then extended by whatever students type.
+- **RateLimit** — `key`, `count`, `expiresAt` with a TTL index. One fixed window per counted action.
 - **Course** — `title`, `slug` (unique), `instructor` → User, `level`, `tags`, `price`, `published`, `lessonCount`. Text index on title/description/tags powers `?q=`.
 - **Lesson** — `course` → Course, `title`, `content`, `videoUrl`, `durationMinutes`, `order`, `isFreePreview`.
 - **Enrollment** — `student` → User, `course` → Course, `completedLessons[]`, `progress` (0–100), `completedAt`. Compound unique index on `(student, course)`.
@@ -233,6 +272,10 @@ curl -b jar.txt localhost:3000/api/enrollments
 - `connectDB()` caches the Mongoose connection on `globalThis` so hot reloads in development
   do not open a new connection each time.
 - Login returns the same message for an unknown email and a wrong password, so the endpoint
-  does not reveal which accounts exist.
+  does not reveal which accounts exist. A used, expired-and-swept, or invented verification token
+  reports the same "invalid" for the same reason.
+- Email delivery sits behind `sendVerificationEmail()` in [src/lib/email/](src/lib/email/). Postal is
+  the implementation; swapping in Resend, SES or Postmark means one new file satisfying
+  `EmailTransport`, with no change to the authentication code.
 - Errors are normalized in `handleError`: Zod and Mongoose validation → 422, duplicate key → 409,
   anything unexpected → 500 with the detail logged server-side rather than returned.

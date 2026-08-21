@@ -1,8 +1,8 @@
 import { CheckIcon } from "@/components/icons";
 
 export const ONBOARDING_STEPS = [
-  { key: "profile", label: "Your profile" },
   { key: "education", label: "Education" },
+  { key: "academic", label: "Academic" },
 ] as const;
 
 export type OnboardingStepKey = (typeof ONBOARDING_STEPS)[number]["key"];

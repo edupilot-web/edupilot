@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { BrandLogo } from "@/components/brand";
+import { VERIFY_EMAIL_PATH } from "@/lib/auth-routing";
 import { logoutAction } from "@/lib/auth-actions";
 import { getCurrentUser } from "@/lib/current-user";
 
@@ -8,13 +9,17 @@ import { getCurrentUser } from "@/lib/current-user";
  * Chrome for the onboarding steps: signed in, but not yet let into the app, so
  * there is no sidebar — just the mark, the step content, and a way out.
  *
- * Anyone who has already finished is sent to the dashboard, so a bookmarked
- * step cannot be used to overwrite a completed profile.
+ * It checks only the two things that are true of every screen underneath: there
+ * is a user, and their address is confirmed. Whether the *profile* is finished
+ * is left to the individual pages, because the answer means opposite things on
+ * a step ("you are done, go to the dashboard") and on the completion screen
+ * ("you are done, that is why you are here") — deciding it once up here is how
+ * that page would bounce itself in a loop.
  */
 export default async function OnboardingLayout({ children }: { children: ReactNode }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if (user.onboardingCompletedAt) redirect("/dashboard");
+  if (user.needsEmailVerification) redirect(VERIFY_EMAIL_PATH);
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f7f9fc] dark:bg-slate-950">

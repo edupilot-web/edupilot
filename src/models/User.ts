@@ -1,29 +1,16 @@
 import mongoose, { Schema, Model, InferSchemaType } from "mongoose";
 import { resetModelInDev } from "@/models/model-cache";
-import {
-  MAX_STUDY_YEAR,
-  MIN_STUDY_YEAR,
-  PROGRAMS,
-  ROLES,
-} from "@/lib/user-fields";
+import { AUTH_PROVIDERS, ROLES } from "@/lib/user-fields";
 
 export {
   ROLES,
   AUTH_PROVIDERS,
-  PROGRAMS,
+  DEGREES,
+  STUDY_STATUSES,
   MIN_STUDY_YEAR,
   MAX_STUDY_YEAR,
 } from "@/lib/user-fields";
-export type { Role, AuthProvider, Program } from "@/lib/user-fields";
-
-const educationSchema = new Schema(
-  {
-    college: { type: String, required: true, trim: true, maxlength: 160 },
-    program: { type: String, enum: PROGRAMS, required: true },
-    currentYear: { type: Number, required: true, min: MIN_STUDY_YEAR, max: MAX_STUDY_YEAR },
-  },
-  { _id: false }
-);
+export type { Role, AuthProvider, Degree, StudyStatus } from "@/lib/user-fields";
 
 const userSchema = new Schema(
   {
@@ -44,6 +31,13 @@ const userSchema = new Schema(
         return !this.googleId;
       },
     },
+    /**
+     * Which sign-in method created the account. Derived rather than trusted:
+     * a `google` account is one that arrived through OAuth, and linking a
+     * Google identity onto an existing password account leaves this as `email`
+     * because the password is still a valid way in.
+     */
+    authProvider: { type: String, enum: AUTH_PROVIDERS, default: "email" },
     role: { type: String, enum: ROLES, default: "student" },
     avatarUrl: { type: String, default: null },
 
@@ -52,15 +46,10 @@ const userSchema = new Schema(
     /** True when the provider vouched for the address, or we verified it. */
     emailVerified: { type: Boolean, default: false },
 
-    // Collected in onboarding step 1.
+    // Optional contact details. Not asked for during onboarding — see
+    // docs/TECHNICAL.md; they are filled in later from the profile screen.
     phone: { type: String, default: null, trim: true, maxlength: 24 },
     city: { type: String, default: null, trim: true, maxlength: 80 },
-
-    // Collected in onboarding step 2.
-    education: { type: educationSchema, default: null },
-
-    /** Null until the education step is submitted. Gates the app (see (app)/layout). */
-    onboardingCompletedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
@@ -90,7 +79,19 @@ export const User: Model<UserDoc> =
   (mongoose.models.User as Model<UserDoc>) ||
   mongoose.model<UserDoc>("User", userSchema);
 
-/** Whether the user still owes us the onboarding steps. */
-export function needsOnboarding(user: { onboardingCompletedAt?: Date | null }): boolean {
-  return !user.onboardingCompletedAt;
+/**
+ * Whether the account still has to prove it owns its address.
+ *
+ * One condition, deliberately: the flag itself. Google accounts do not get a
+ * second rule exempting them — they get `emailVerified: true` at creation,
+ * because the provider has already established the identity, and asking again
+ * would be a dead end for a user with no password to sign back in with.
+ *
+ * The rare Google account whose `email_verified` claim was false is therefore
+ * treated like any other unconfirmed address: it is sent a link. Trusting an
+ * address the provider itself would not vouch for is the one thing an
+ * `authProvider === "google"` shortcut would quietly do.
+ */
+export function needsEmailVerification(user: { emailVerified?: boolean }): boolean {
+  return user.emailVerified !== true;
 }

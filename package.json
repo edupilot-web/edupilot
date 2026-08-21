@@ -8,6 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "seed": "tsx --env-file=.env.local scripts/seed.ts",
+    "seed:colleges": "tsx --env-file=.env.local scripts/seed-colleges.ts",
+    "ensure-indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
+    "migrate:profiles": "tsx --env-file=.env.local scripts/migrate-student-profiles.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

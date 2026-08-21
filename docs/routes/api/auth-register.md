@@ -27,10 +27,18 @@ Unknown keys are stripped rather than rejected.
 
 1. `registerSchema.parse(await req.json())` — throws `ZodError` → 422.
 2. `createAccount()` ([accounts.ts](../../../src/lib/accounts.ts)):
-   `connectDB()`, `User.findOne({ email })`, then `bcrypt.hash(password, 12)` and `User.create`.
+   `connectDB()`, `User.findOne({ email })`, then `bcrypt.hash(password, 12)` and `User.create`
+   with `authProvider: "email"` and **`emailVerified: false`**.
 3. `startSession({ sub, email, role })` — **no `remember` argument**, so the cookie is a 7-day
    persistent one.
-4. `ok({ user: user.toJSON() }, 201)`.
+4. `sendVerification(..., { enforceRateLimit: false })` — mails the link. **A delivery failure does
+   not fail the request**: the account exists in a valid unverified state, and the client's recourse
+   is to ask for another link rather than to register again.
+5. `ok({ user, emailVerificationSent, next }, 201)`.
+
+`next` is `destinationFor(...)`, the same function the browser paths use — a client that follows it
+cannot end up somewhere the page gates would bounce it away from. For a fresh account it is always
+`/verify-email`.
 
 `passwordHash` cannot escape: the field is `select: false` on the schema *and* deleted in
 `User.toJSON()`.
@@ -39,7 +47,7 @@ Unknown keys are stripped rather than rejected.
 
 | Status | When | Body |
 | --- | --- | --- |
-| 201 | created | `{ "data": { "user": … } }` + `Set-Cookie` |
+| 201 | created | `{ "data": { "user": …, "emailVerificationSent": bool, "next": "/verify-email" } }` + `Set-Cookie` |
 | 409 | email already registered | `{ "error": { "message": "An account with that email already exists" } }` |
 | 422 | schema failure | `"Validation failed"` with Zod `issues[]` in `details` |
 | 500 | anything unexpected | `"Internal server error"` |

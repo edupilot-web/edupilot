@@ -42,17 +42,27 @@ signupFormSchema.safeParse   → field errors, no DB call
    │      email taken → { errors: { email: ["An account with that email already exists."] } }
    ▼ startSession(..., { remember: true })      → 30-day cookie
    │
-   ▼ redirect(safeDestination(next))            → /dashboard
+   ▼ sendVerification(..., { enforceRateLimit: false })
+   │      failure is logged and tolerated — the account still exists
+   ▼ redirect("/verify-email")                  → ?next= carried through
 ```
 
-Two specifics:
+Four specifics:
 
 - **The confirmation match is re-checked inside the action.** Zod skips a schema-level `refine`
   when any individual field is invalid, so a weak password plus unticked terms would otherwise
   hide a mismatched confirmation until the next submit. The action adds the error in the same
   pass.
 - **New accounts always get a persistent session** (`remember: true`). There is no "Remember me"
-  box on sign-up, and being signed out on browser close would be a poor welcome.
+  box on sign-up, and being signed out on browser close would be a poor welcome. The session is also
+  what lets the next screen offer Resend and Change email without asking someone to sign in with an
+  account they have not confirmed.
+- **Sign-up lands on `/verify-email`, not the dashboard or onboarding.** An unconfirmed address is
+  the first thing that has to be resolved; see [verify-email.md](verify-email.md).
+- **The first verification email is not rate limited** (`enforceRateLimit: false`). Spending the
+  user's allowance before they have asked for anything would be perverse. **A delivery failure does
+  not fail the sign-up**: the account exists with `emailVerified: false`, which is a valid resting
+  state, and the recourse is Resend rather than a second sign-up.
 
 ## Role assignment
 

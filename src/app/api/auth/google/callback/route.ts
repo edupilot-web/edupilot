@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { findOrCreateGoogleUser } from "@/lib/accounts";
 import { startSession } from "@/lib/auth";
+import { destinationFor } from "@/lib/auth-routing";
+import { sendVerification } from "@/lib/email-verification";
 import { OAUTH_STATE_COOKIE, exchangeCodeForProfile, redirectUri } from "@/lib/google-oauth";
-import { safeDestination } from "@/lib/redirects";
+import { isProfileCompleted } from "@/lib/student-profile";
+import { needsEmailVerification } from "@/models/User";
 
 /** Sends the user back to sign-in with a code the page turns into a message. */
 function failed(request: NextRequest, reason: string) {
@@ -51,11 +54,33 @@ export async function GET(request: NextRequest) {
       { remember: true }
     );
 
-    // New accounts (and anyone who abandoned it) finish onboarding first; the
-    // (onboarding) layout bounces them on if they are already done.
-    const destination = user.onboardingCompletedAt
-      ? safeDestination(expected.next)
-      : `/onboarding/profile${expected.next ? `?next=${encodeURIComponent(expected.next)}` : ""}`;
+    // Google has already established the identity behind the address, so the
+    // usual case is `emailVerified: true` and no link at all — asking again
+    // would strand someone who has no password to sign back in with. The
+    // exception is an account whose `email_verified` claim came back false,
+    // which is exactly the address we should not take Google's word for.
+    const unverified = needsEmailVerification(user);
+    if (unverified) {
+      await sendVerification(
+        {
+          id: user._id.toString(),
+          email: user.email,
+          name: user.name,
+          emailVerified: false,
+        },
+        { enforceRateLimit: false }
+      );
+    }
+
+    // Onboarding first for a new account, or one abandoned midway; straight
+    // through for anyone who has already finished.
+    const destination = destinationFor(
+      {
+        needsEmailVerification: unverified,
+        profileCompleted: unverified ? false : await isProfileCompleted(user._id.toString()),
+      },
+      expected.next
+    );
 
     const response = NextResponse.redirect(new URL(destination, request.nextUrl.origin));
     response.cookies.delete(OAUTH_STATE_COOKIE);

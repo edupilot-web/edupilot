@@ -49,6 +49,14 @@ export async function connectDB(): Promise<typeof mongoose> {
       // unreachable cluster kills the invocation before the error surfaces and
       // the caller sees a dead request instead of a message it can show.
       serverSelectionTimeoutMS: Number(process.env.MONGODB_TIMEOUT_MS ?? 8000),
+      // Mongoose builds every declared index on first use of a model. That is
+      // convenient while developing and wrong in production: index builds are
+      // slow on a populated collection and would run on whichever request
+      // happened to touch the model first. Production creates them once, up
+      // front, with `npm run ensure-indexes`.
+      autoIndex: process.env.MONGODB_AUTO_INDEX
+        ? process.env.MONGODB_AUTO_INDEX === "true"
+        : process.env.NODE_ENV !== "production",
     });
   }
 

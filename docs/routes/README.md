@@ -19,6 +19,8 @@ means a new file here plus a row in the tables below.
 | `/` | public | [pages/root.md](pages/root.md) | yes — marketing hero, most header links 404 |
 | `/login` | public | [pages/login.md](pages/login.md) | yes |
 | `/signup` | public | [pages/signup.md](pages/signup.md) | yes |
+| `/verify-email` | public | [pages/verify-email.md](pages/verify-email.md) | yes — link target *and* the check-your-inbox screen |
+| `/onboarding/*` | session | [pages/onboarding.md](pages/onboarding.md) | yes — two steps plus a completion screen |
 | `/forgot-password` | public | [pages/forgot-password.md](pages/forgot-password.md) | placeholder — no reset flow |
 | `/terms` | public | [pages/terms.md](pages/terms.md) | placeholder — no text written |
 | `/privacy` | public | [pages/privacy.md](pages/privacy.md) | placeholder — no text written |
@@ -34,6 +36,7 @@ means a new file here plus a row in the tables below.
 | POST | `/api/auth/login` | public | [api/auth-login.md](api/auth-login.md) |
 | POST | `/api/auth/logout` | anyone | [api/auth-logout.md](api/auth-logout.md) |
 | GET | `/api/auth/me` | session | [api/auth-me.md](api/auth-me.md) |
+| GET | `/api/colleges/search` | session | [api/colleges-search.md](api/colleges-search.md) |
 | GET, POST | `/api/courses` | public / instructor | [api/courses.md](api/courses.md) |
 | GET, PATCH, DELETE | `/api/courses/:id` | public / owner | [api/courses-id.md](api/courses-id.md) |
 | GET, POST | `/api/courses/:id/lessons` | public / owner | [api/courses-id-lessons.md](api/courses-id-lessons.md) |
@@ -43,10 +46,12 @@ means a new file here plus a row in the tables below.
 
 ## Not a route
 
-Two things in `src/app/` are not routes and have no file here: `layout.tsx` (root HTML shell,
-fonts, metadata) and `(app)/layout.tsx` (the session gate and chrome shared by every signed-in
-screen). The gate is documented in [conventions.md](conventions.md#signed-in-page-conventions)
-because every signed-in route depends on it.
+Three things in `src/app/` are not routes and have no file here: `layout.tsx` (root HTML shell,
+fonts, metadata), `(app)/layout.tsx` (the session gate and chrome shared by every signed-in
+screen), and `(onboarding)/layout.tsx` (the same gate minus the sidebar). The gates are documented
+in [conventions.md](conventions.md#signed-in-page-conventions) and in
+[../TECHNICAL.md](../TECHNICAL.md#65-route-protection--proxyts-and-auth-routingts), because the
+order in which they redirect is a single shared rule rather than per-route behaviour.
 
 ## How the two halves connect today
 

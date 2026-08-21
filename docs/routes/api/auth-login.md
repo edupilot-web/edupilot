@@ -28,13 +28,18 @@
    `User.findOne({ email }).select("+passwordHash")` — the hash must be opted into — then
    `bcrypt.compare`.
 3. On success `startSession({ sub, email, role }, { remember })`.
-4. `ok({ user: user.toJSON() })`.
+4. `ok({ user, next })`, where `next` is `destinationFor(...)` — `/verify-email` for an unconfirmed
+   address, `/onboarding/education` for an unfinished profile, otherwise `/dashboard`.
+
+**An unverified account still signs in.** That is how it reaches the screen offering a new link;
+refusing here would leave anyone whose first email went astray with no way back in. `next` is what
+tells the client where the account may actually go.
 
 ## Responses
 
 | Status | When | Body |
 | --- | --- | --- |
-| 200 | signed in | `{ "data": { "user": … } }` + `Set-Cookie` |
+| 200 | signed in | `{ "data": { "user": …, "next": "/dashboard" \| "/verify-email" \| "/onboarding/education" } }` + `Set-Cookie` |
 | 401 | unknown email **or** wrong password | `{ "error": { "message": "Invalid email or password" } }` |
 | 422 | schema failure | `"Validation failed"` with `issues[]` |
 | 500 | unexpected | `"Internal server error"` |

@@ -1,88 +1,90 @@
 "use client";
 
-import Link from "next/link";
-import { useActionState, useState } from "react";
-import { FormMessage, SelectField, TextField } from "@/components/auth/fields";
+import { useActionState, useMemo, useState } from "react";
+import { FormMessage, SelectField } from "@/components/auth/fields";
 import { SubmitButton } from "@/components/auth/submit-button";
-import { BookIcon, ChevronLeftIcon } from "@/components/icons";
-import { completeOnboardingAction } from "@/lib/onboarding-actions";
-import { MAX_STUDY_YEAR, MIN_STUDY_YEAR, PROGRAMS } from "@/lib/user-fields";
+import { CollegeField } from "@/components/onboarding/college-field";
+import { Combobox, type ComboboxOption } from "@/components/onboarding/combobox";
+import { BookIcon } from "@/components/icons";
+import { saveEducationAction } from "@/lib/onboarding-actions";
+import { DEGREES, SPECIALIZATION_SUGGESTIONS } from "@/lib/user-fields";
 
-const PROGRAM_OPTIONS = PROGRAMS.map((program) => ({ value: program, label: program }));
+const DEGREE_OPTIONS = DEGREES.map((degree) => ({ value: degree, label: degree }));
 
-const YEAR_OPTIONS = Array.from(
-  { length: MAX_STUDY_YEAR - MIN_STUDY_YEAR + 1 },
-  (_, index) => MIN_STUDY_YEAR + index
-).map((year) => ({
-  value: String(year),
-  label: `Year ${year}`,
+const SPECIALIZATION_OPTIONS: ComboboxOption[] = SPECIALIZATION_SUGGESTIONS.map((name) => ({
+  id: name,
+  label: name,
 }));
 
 /**
- * Onboarding step 2 — the College / Program / Current year branch. Submitting
- * this marks onboarding complete, so the button says so.
+ * Onboarding step 1 — where the student studies and what they study.
+ *
+ * Both text fields accept anything: branch names differ between universities
+ * far more than a fixed list can cover, and a student forced to pick the
+ * nearest wrong option leaves us with data that reads as correct and is not.
  */
 export function EducationForm({
   defaults,
   next,
 }: {
-  defaults: { college: string; program: string; currentYear: string };
+  defaults: {
+    collegeId: string;
+    collegeName: string;
+    degree: string;
+    specialization: string;
+  };
   next?: string;
 }) {
-  const [state, formAction, pending] = useActionState(completeOnboardingAction, undefined);
+  const [state, formAction, pending] = useActionState(saveEducationAction, undefined);
 
-  const [college, setCollege] = useState(defaults.college);
-  const [program, setProgram] = useState(defaults.program);
-  const [currentYear, setCurrentYear] = useState(defaults.currentYear);
+  const [degree, setDegree] = useState(defaults.degree);
+  const [specialization, setSpecialization] = useState(defaults.specialization);
+
+  // Filtered in the browser: the list is a few dozen strings, so a round trip
+  // per keystroke would be slower and no more accurate.
+  const specializationMatches = useMemo(() => {
+    const term = specialization.trim().toLowerCase();
+    if (!term) return SPECIALIZATION_OPTIONS.slice(0, 8);
+    return SPECIALIZATION_OPTIONS.filter((option) =>
+      option.label.toLowerCase().includes(term)
+    ).slice(0, 8);
+  }, [specialization]);
 
   return (
     <form action={formAction} noValidate className="space-y-4">
       {next && <input type="hidden" name="next" value={next} />}
+      <input type="hidden" name="specialization" value={specialization.trim()} />
 
       {state?.message && <FormMessage>{state.message}</FormMessage>}
 
-      <TextField
-        label="College or university"
-        name="college"
-        placeholder="e.g. Indian Institute of Technology, Bombay"
-        autoComplete="organization"
+      <CollegeField
+        defaults={{ collegeId: defaults.collegeId, collegeName: defaults.collegeName }}
+        errors={state?.errors?.collegeName}
+      />
+
+      <SelectField
+        label="Degree / Program"
+        name="degree"
+        placeholder="Select your degree"
+        options={DEGREE_OPTIONS}
+        value={degree}
+        onChange={setDegree}
+        errors={state?.errors?.degree}
+      />
+
+      <Combobox
+        label="Specialization / Branch"
         icon={<BookIcon />}
-        value={college}
-        onChange={setCollege}
-        errors={state?.errors?.college}
+        placeholder="e.g. Computer Science and Engineering"
+        value={specialization}
+        onChange={setSpecialization}
+        options={specializationMatches}
+        errors={state?.errors?.specialization}
+        hint="Pick a suggestion or type your own."
       />
 
-      <SelectField
-        label="Program"
-        name="program"
-        placeholder="Choose your program"
-        options={PROGRAM_OPTIONS}
-        value={program}
-        onChange={setProgram}
-        errors={state?.errors?.program}
-      />
-
-      <SelectField
-        label="Current year"
-        name="currentYear"
-        placeholder="Choose your current year"
-        options={YEAR_OPTIONS}
-        value={currentYear}
-        onChange={setCurrentYear}
-        errors={state?.errors?.currentYear}
-      />
-
-      <div className="flex items-center gap-3 pt-1">
-        <Link
-          href={next ? `/onboarding/profile?next=${encodeURIComponent(next)}` : "/onboarding/profile"}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 px-3.5 py-2.5 text-[14px] font-medium text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-        >
-          <ChevronLeftIcon className="h-4 w-4" />
-          Back
-        </Link>
-        <div className="flex-1">
-          <SubmitButton pending={pending}>Finish setup</SubmitButton>
-        </div>
+      <div className="pt-2">
+        <SubmitButton pending={pending}>Continue</SubmitButton>
       </div>
     </form>
   );

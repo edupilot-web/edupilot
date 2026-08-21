@@ -2,10 +2,15 @@ import Link from "next/link";
 
 const ENDPOINTS = [
   { group: "Auth", routes: [
-    { method: "POST", path: "/api/auth/register", desc: "Create an account and start a session" },
-    { method: "POST", path: "/api/auth/login", desc: "Sign in" },
+    { method: "POST", path: "/api/auth/register", desc: "Create an account, start a session, mail the verification link" },
+    { method: "POST", path: "/api/auth/login", desc: "Sign in — the response carries where the account may go next" },
     { method: "POST", path: "/api/auth/logout", desc: "Sign out" },
-    { method: "GET", path: "/api/auth/me", desc: "Current user" },
+    { method: "GET", path: "/api/auth/me", desc: "Current user, student profile and both gate flags" },
+    { method: "GET", path: "/api/auth/google/start", desc: "Begin Continue with Google" },
+    { method: "GET", path: "/api/auth/google/callback", desc: "Verify the id_token and sign in" },
+  ]},
+  { group: "Onboarding", routes: [
+    { method: "GET", path: "/api/colleges/search?q=", desc: "College autocomplete (authenticated)" },
   ]},
   { group: "Courses", routes: [
     { method: "GET", path: "/api/courses", desc: "Catalogue — ?q= &level= &tag= &page= &limit=" },

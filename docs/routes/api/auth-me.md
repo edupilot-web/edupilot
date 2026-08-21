@@ -14,7 +14,10 @@ answer "am I signed in, and as whom".
 1. `requireAuth()` → verifies the JWT, throws `HttpError(401)` when it is missing, malformed or
    expired.
 2. `connectDB()`, then `User.findById(session.sub)`.
-3. `ok({ user: user.toJSON() })` — `toJSON` strips `passwordHash` and `__v`.
+3. `getStudentProfile(session.sub)` — every client asking "who am I" is really asking "and what is
+   this account allowed to do next", so the profile travels with the user.
+4. `ok({ user, studentProfile, needsEmailVerification, profileCompleted })` — `toJSON` strips
+   `passwordHash` and `__v`.
 
 Unlike most reads here this one is a hydrated document rather than `.lean()`, because `toJSON()`
 is where the hash-stripping transform lives.
@@ -23,7 +26,7 @@ is where the hash-stripping transform lives.
 
 | Status | When | Body |
 | --- | --- | --- |
-| 200 | signed in | `{ "data": { "user": … } }` |
+| 200 | signed in | `{ "data": { "user": …, "studentProfile": … \| null, "needsEmailVerification": bool, "profileCompleted": bool } }` |
 | 401 | no / bad / expired cookie | `"Authentication required"` |
 | 404 | valid token, user row gone | `"User not found"` |
 | 500 | unexpected | `"Internal server error"` |
@@ -39,10 +42,24 @@ token. Clients should treat 404 here the same as 401 and sign the user out.
       "name": "Ada Lovelace",
       "email": "ada@edupilot.dev",
       "role": "instructor",
+      "authProvider": "email",
+      "emailVerified": true,
       "avatarUrl": null,
       "createdAt": "2026-08-19T09:12:44.108Z",
       "updatedAt": "2026-08-19T09:12:44.108Z"
-    }
+    },
+    "studentProfile": {
+      "collegeId": "6a87…bf1b",
+      "collegeName": "University of Cambridge",
+      "degree": "PhD",
+      "specialization": "Mathematics",
+      "studyStatus": "graduated",
+      "currentYear": null,
+      "graduationYear": 2024,
+      "profileCompleted": true
+    },
+    "needsEmailVerification": false,
+    "profileCompleted": true
   }
 }
 ```
