@@ -172,7 +172,10 @@ async function resolveCollege(
     const created = await College.create({
       name: input.collegeName,
       normalizedName,
-      source: "user",
+      // Flagged as student-entered so the admin Data Quality queue can surface
+      // it for review rather than it silently joining the curated directory.
+      source: "student",
+      verificationStatus: "not-verified",
     });
     return created._id;
   } catch (err) {

@@ -13,6 +13,11 @@ const MAX_RESULTS = 8;
 /**
  * Autocomplete for the college field.
  *
+ * Reads the same `colleges` collection the admin app administers — one
+ * directory, not a student copy and an admin copy. Archived and suspended rows
+ * are excluded, so retiring a college in the admin stops it being offered here
+ * without touching the profiles that already point at it.
+ *
  * Ranks a prefix match above a match anywhere in the name, so typing "andhra"
  * offers "Andhra University" before a college that merely sits in Andhra
  * Pradesh. Both queries run against `normalizedName`, which is what lets
@@ -30,13 +35,13 @@ export async function searchColleges(query: string): Promise<CollegeSuggestion[]
   const anywhere = new RegExp(escaped);
 
   const [starts, contains] = await Promise.all([
-    College.find({ normalizedName: prefix })
-      .select("name city state")
+    College.find({ normalizedName: prefix, status: "active" })
+      .select("name cityName districtName stateName")
       .sort({ normalizedName: 1 })
       .limit(MAX_RESULTS)
       .lean(),
-    College.find({ normalizedName: anywhere })
-      .select("name city state")
+    College.find({ normalizedName: anywhere, status: "active" })
+      .select("name cityName districtName stateName")
       .sort({ normalizedName: 1 })
       .limit(MAX_RESULTS)
       .lean(),
@@ -52,7 +57,10 @@ export async function searchColleges(query: string): Promise<CollegeSuggestion[]
     results.push({
       id,
       name: college.name,
-      location: [college.city, college.state].filter(Boolean).join(", ") || null,
+      location:
+        [college.cityName ?? college.districtName, college.stateName]
+          .filter(Boolean)
+          .join(", ") || null,
     });
     if (results.length === MAX_RESULTS) break;
   }

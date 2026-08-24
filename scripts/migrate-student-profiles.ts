@@ -145,7 +145,10 @@ async function ensureCollege(name: string): Promise<mongoose.Types.ObjectId | nu
   const existing = await College.findOne({ normalizedName }).select("_id").lean();
   if (existing) return existing._id;
 
-  const created = await College.create({ name, normalizedName, source: "user" });
+  // "student" rather than "admin": these names came from the old onboarding
+  // form, so they belong in the Data Quality review queue like any other
+  // student-entered college.
+  const created = await College.create({ name, normalizedName, source: "student" });
   return created._id;
 }
 

@@ -9,12 +9,14 @@
     "lint": "eslint",
     "seed": "tsx --env-file=.env.local scripts/seed.ts",
     "seed:colleges": "tsx --env-file=.env.local scripts/seed-colleges.ts",
+    "seed:admin": "tsx --env-file=.env.local scripts/seed-admin.ts",
     "ensure-indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
     "migrate:profiles": "tsx --env-file=.env.local scripts/migrate-student-profiles.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
     "jose": "^6.2.9",
     "mongoose": "^9.9.3",
     "next": "16.3.1",
@@ -33,5 +35,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
