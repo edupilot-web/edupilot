@@ -1,7 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { BuildingIcon, DownloadIcon, UploadIcon } from "@/components/admin/icons";
-import { PlusIcon } from "@/components/icons";
+import {
+  BuildingIcon,
+  DownloadIcon,
+  ShieldCheckIcon,
+  ShieldIcon,
+  UploadIcon,
+} from "@/components/admin/icons";
+import { AlertIcon, ClockIcon, CloseIcon, PlusIcon } from "@/components/icons";
 import { BulkBar } from "@/components/admin/bulk-bar";
 import {
   Cell,
@@ -15,7 +21,14 @@ import {
 import { RowCheckbox, SelectionScope } from "@/components/admin/selection";
 import { AutonomyBadge, RecordStatusBadge, VerificationBadge } from "@/components/admin/status";
 import { TableToolbar, type FilterGroup } from "@/components/admin/table-toolbar";
-import { Badge, BUTTON_STYLES, Card, EmptyState, PageHeader } from "@/components/admin/ui";
+import {
+  Badge,
+  BUTTON_STYLES,
+  Card,
+  EmptyState,
+  PageHeader,
+  StatTile,
+} from "@/components/admin/ui";
 import { bulkCollegeAction } from "@/lib/admin/actions/colleges";
 import { can, requirePermission } from "@/lib/admin/current-admin";
 import { formatNumber, formatRelative } from "@/lib/admin/format";
@@ -32,12 +45,33 @@ import {
   COLLEGE_FILTER_KEYS,
   COLLEGE_SORT_FIELDS,
   getCollegeFacets,
+  getCollegeVerificationTotals,
   listColleges,
 } from "@/lib/admin/data/colleges";
 
 export const metadata: Metadata = { title: "Colleges" };
 
 const BASE = "/admin/colleges";
+
+/**
+ * The census tiles, in the order the palette was validated in.
+ *
+ * Not `VERIFICATION_STATUSES` order, which puts emerald next to rose — a pair
+ * that deuteranopic readers separate by ΔE 5.8, under the floor. Reading down
+ * from settled to rejected keeps that pair apart and happens to be the more
+ * natural order to read anyway. Every tile carries its label, so colour is
+ * never the only thing distinguishing two of them.
+ *
+ * Icons are the same glyphs their status wears elsewhere, and the tones are
+ * `BADGE_TONES` — a status must not be violet in the table and orange above it.
+ */
+const CENSUS_TILES = [
+  { status: "verified", tone: "success", icon: ShieldCheckIcon },
+  { status: "pending", tone: "warning", icon: ClockIcon },
+  { status: "needs-review", tone: "purple", icon: AlertIcon },
+  { status: "rejected", tone: "danger", icon: CloseIcon },
+  { status: "not-verified", tone: "neutral", icon: ShieldIcon },
+] as const;
 
 const COLUMNS: Column[] = [
   { key: "name", label: "College", sortKey: "name" },
@@ -63,13 +97,23 @@ export default async function CollegesPage(props: PageProps<"/admin/colleges">) 
   const admin = await requirePermission("college.view", BASE);
   const params = (await props.searchParams) as SearchParams;
 
-  const [{ rows, total, page, limit }, facets] = await Promise.all([
+  const [{ rows, total, page, limit }, facets, census] = await Promise.all([
     listColleges(params),
     getCollegeFacets(params),
+    getCollegeVerificationTotals(),
   ]);
 
   const sort = readSort(params, COLLEGE_SORT_FIELDS, { field: "name", direction: 1 });
   const filterCount = activeFilterCount(params, COLLEGE_FILTER_KEYS);
+  // Which census tile reads as current. Only a lone value counts: with two
+  // statuses filtered, no single tile describes the table any more.
+  const selectedVerification = (
+    params.verification === undefined
+      ? []
+      : Array.isArray(params.verification)
+        ? params.verification
+        : [params.verification]
+  ).filter((value) => value !== "");
   const currentQuery = new URLSearchParams(
     Object.entries(params).flatMap(([key, value]) =>
       value === undefined ? [] : (Array.isArray(value) ? value : [value]).map((v) => [key, v] as [string, string])
@@ -179,6 +223,40 @@ export default async function CollegesPage(props: PageProps<"/admin/colleges">) 
           </>
         }
       />
+
+      {/*
+        A census of the directory, and the way into each slice of it.
+
+        The counts are directory-wide, not filtered — the same convention the
+        filter chips follow, and what makes the row usable as a filter: counts
+        that moved with the current filter would read 0 on every tile but the
+        one just clicked. The filtered figure is in the table footer.
+      */}
+      <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-6">
+        <StatTile
+          label="Total Colleges"
+          value={census.total}
+          tone="info"
+          icon={BuildingIcon}
+          href={buildHref(BASE, params, { verification: null })}
+          active={selectedVerification.length === 0}
+        />
+        {CENSUS_TILES.map((tile) => {
+          const count = census.byStatus[tile.status];
+          return (
+            <StatTile
+              key={tile.status}
+              label={VERIFICATION_STATUS_LABELS[tile.status]}
+              value={count}
+              share={census.total > 0 ? `${Math.round((count / census.total) * 100)}%` : undefined}
+              tone={tile.tone}
+              icon={tile.icon}
+              href={buildHref(BASE, params, { verification: tile.status })}
+              active={selectedVerification.length === 1 && selectedVerification[0] === tile.status}
+            />
+          );
+        })}
+      </div>
 
       <SelectionScope pageIds={rows.map((row) => row.id)}>
         <Card padded={false}>

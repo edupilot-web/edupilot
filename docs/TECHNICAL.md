@@ -4,8 +4,8 @@ Living record of what this project is, how it is built, and what is deliberately
 **Keep this file updated in the same change that alters behaviour** — new route, new model field,
 new invariant, new dependency.
 
-- Status: backend complete, no product UI yet
-- Last updated: 2026-08-21
+- Status: student auth + onboarding complete; admin application complete for institution, student and administration management
+- Last updated: 2026-08-24
 - Owner: @RajeshKolluri
 - **Per-route documentation lives in [routes/](routes/)** — one file per URL, covering the page or
   handler, its server and client halves, every status it returns, and what about it is not real.
@@ -45,6 +45,23 @@ Scope delivered so far:
 | Password reset, terms and privacy pages | placeholders |
 | Tasks, wallet, streaks, timetable, notices, placements — data models | not started |
 | Catalogue / course / lesson UI, payments, uploads, tests | not started |
+
+**Admin application** — `/admin`, separate sessions and permissions (§11):
+
+| Capability | State |
+| --- | --- |
+| Institution master data: colleges, universities, affiliations, autonomy, campuses, departments, programs | done |
+| Geography: states, districts, cities as records rather than enums | done |
+| Bulk import from CSV/XLSX: mapping, validation, duplicate detection, preview, commit, per-row history | done |
+| Verification queue across colleges, universities and students | done |
+| Data-quality checks and near-duplicate detection | done |
+| Student administration with permission-gated contact details | done |
+| RBAC: 9 seeded roles, 47 permissions, per-account overrides | done |
+| Audit log with before/after diffs, and admin sign-in history | done |
+| Analytics: growth, funnel, institution composition, geographic drill-down | done |
+| Feature flags and platform settings | done |
+| Content, community and notification management | navigation only — each says so on screen |
+| Export generation (the job model and history exist; no file writer) | partial |
 
 ## 2. Architecture
 
@@ -240,6 +257,21 @@ User ──1:1──> StudentProfile ──N:1──> College
 | **EmailVerificationToken** | `userId`→User, `tokenHash`, `expiresAt`, `createdAt` | `userId`; unique `tokenHash`; **TTL on `expiresAt`** |
 | **College** | `name`, `normalizedName`, `city`, `state`, `source` ∈ {seed,user}, timestamps | unique `normalizedName`; compound `{normalizedName:1, name:1}` |
 | **RateLimit** | `key`, `count`, `expiresAt`, `createdAt` | unique `key`; **TTL on `expiresAt`** |
+| **State** | `name`, `code`, `kind`, `active`, `displayOrder` | unique `code`; `{displayOrder, name}` |
+| **District** | `name`, `stateId`→State, `stateCode`, `active` | **unique `{stateId, name}`** |
+| **City** | `name`, `districtId`→District, `stateId`→State, `pincode` | **unique `{districtId, name}`** |
+| **University** | `name`, `normalizedName`, `shortName`, `code`, `type`, `managementType`, location refs + names, `accreditations[]`, `verificationStatus`, `collegeCount`, timestamps | unique `normalizedName`; unique partial `code`; `{stateId, type}` |
+| **College** *(extended)* | the student-facing fields **plus** `officialName`, `code`, `institutionType`, `managementType`, `autonomyStatus`, `universityId`/`Name`/`Code`, `currentAffiliationId`, `stateId`/`districtId`/`cityId` + names, `address`, `pincode`, `location`, `accreditations[]`, `verificationStatus`, `studentCount`, `source`, `sourceImportId`, `internalNotes` | unique `normalizedName`; unique partial `code`; `{stateId, districtId, name}`; `{verificationStatus, updatedAt}`; `{universityId, name}`; weighted text index |
+| **Affiliation** | `collegeId`→College, `universityId`→University, `type`, `status`, `startDate`, `endDate`, `referenceNumber`, `documentUrl`, `verificationStatus` | `{collegeId, startDate}`; `{universityId, status}` |
+| **AutonomyRecord** | `collegeId`→College, `status`, `event`, `validFrom`, `validUntil`, `approvalAuthority`, `approvalReference`, `documentUrl` | `{collegeId, validFrom, createdAt}` |
+| **Campus / Department / Program** | per-college academic structure; Department carries a `canonicalKey`, Program carries `degree` + `specialization` matching the student profile | unique `{collegeId, name}` on each; `canonicalKey`; `{degree, specialization}` |
+| **AcademicYear** | `label`, `startDate`, `endDate`, `isCurrent`, `status` | unique `label`; `isCurrent` |
+| **AdminUser** | `name`, `email`, `passwordHash`, `roleId`→Role, `extraPermissions[]`, `deniedPermissions[]`, `team`, `status`, `inviteTokenHash`, 2FA, lockout fields | unique `email`; `{status, name}` |
+| **AdminLoginEvent** | `adminId`, `email`, `outcome`, `ip`, `userAgent` | `adminId`; `outcome`; **TTL 180 days on `createdAt`** |
+| **Role** | `name`, `slug`, `description`, `permissions[]`, `system`, `adminCount` | unique `slug` |
+| **AuditLog** | actor fields, `action`, `entityType`, `entityId`, `entityLabel`, `before`, `after`, `metadata`, `batchId`, `severity`, `ip` | `{createdAt:-1}`; `{entityType, entityId, createdAt}`; `{actorId, createdAt}` |
+| **ImportJob / ImportRow** | job state machine + one row per parsed line, with its errors, warnings, duplicate match and result | `{stage, createdAt}`; **unique `{jobId, rowNumber}`**; `{jobId, status, rowNumber}` |
+| **ExportJob / BackgroundJob / ErrorLog / FeatureFlag / Setting / SavedView** | operations (§11.7) | see `src/models/SystemModels.ts`; TTL 90 days on `ErrorLog.lastSeenAt` |
 | **Course** | `title`, `slug`, `description`, `instructor`→User, `level` ∈ {beginner,intermediate,advanced}, `tags[]`, `price`, `coverImageUrl`, `published`, `lessonCount`, timestamps | unique `slug`; `instructor`; `published`; text index on `title`+`description`+`tags` |
 | **Lesson** | `course`→Course, `title`, `content`, `videoUrl`, `durationMinutes`, `order`, `isFreePreview`, timestamps | compound `{course:1, order:1}` |
 | **Enrollment** | `student`→User, `course`→Course, `completedLessons[]`→Lesson, `progress` 0–100, `completedAt`, timestamps | **unique compound `{student:1, course:1}`** |
@@ -288,18 +320,30 @@ nothing. That failure mode cost real debugging time; the reset is cheaper than r
 2. **`profileCompleted` is derived, never asserted.** Both step writers recompute it from the merged
    document with [`isProfileComplete()`](../src/models/StudentProfile.ts), so the flag cannot drift
    from the fields it summarises. A graduate needs no `currentYear`; a student does.
-3. **At most one live verification token per user** — `issueVerificationToken()` deletes the
+3. **Exactly one active affiliation per college** — enforced by the writers, not by an index:
+   `setAffiliation` closes the outgoing period before opening the new one. No partial unique
+   index can express it, because a *pending* row that has not started yet is legitimately
+   `active`-shaped too. The Data Quality screen counts violations, so a write that went around
+   the helpers is visible rather than silent.
+4. **A college's affiliation and autonomy are histories, not fields.** `College.universityId` and
+   `College.autonomyStatus` are denormalised copies of the current `Affiliation` and
+   `AutonomyRecord`, written only by the code that writes those. Moving a college opens a period
+   and closes the last one; it never overwrites, because the student who graduated under the
+   previous university still did.
+5. **The audit log is append-only.** Nothing in the application updates or deletes a row in
+   `auditLogs`, and no admin screen offers to.
+6. **At most one live verification token per user** — `issueVerificationToken()` deletes the
    outstanding ones before inserting, so a resend invalidates the previous link.
-4. **Verification tokens are single-use** — the row is deleted before `emailVerified` is set, so a
+7. **Verification tokens are single-use** — the row is deleted before `emailVerified` is set, so a
    crash between the two leaves a dead link rather than a reusable one.
-5. **One enrollment per (student, course)** — enforced by the unique index; POST also returns the
+8. **One enrollment per (student, course)** — enforced by the unique index; POST also returns the
    existing row instead of erroring, making enroll idempotent.
-6. **Unique slug** — generated from the title, then `-2`, `-3`… until free; the unique index is the
+9. **Unique slug** — generated from the title, then `-2`, `-3`… until free; the unique index is the
    real guarantee and a lost race surfaces as 409.
-7. **`Course.lessonCount` tracks lesson rows** — `$inc` on lesson create and delete.
-8. **No orphans** — deleting a course cascades to its lessons and enrollments; a deleted lesson is
+10. **`Course.lessonCount` tracks lesson rows** — `$inc` on lesson create and delete.
+11. **No orphans** — deleting a course cascades to its lessons and enrollments; a deleted lesson is
    `$pull`ed from every enrollment's `completedLessons`.
-9. **`progress` = round(completed ÷ total lessons × 100)**, recomputed on every progress write;
+12. **`progress` = round(completed ÷ total lessons × 100)**, recomputed on every progress write;
    `completedAt` is set exactly when progress hits 100 and cleared otherwise.
 
 ## 5. API surface
@@ -614,6 +658,89 @@ to agree to terms nobody has written yet.
 from **server** time, so it would read wrongly for anyone in another timezone — fine for one campus,
 not for a distributed user base.
 
+### 6.8 Census tiles on the Colleges list
+
+The Colleges list opens with six tiles — a total plus one per verification status — rendered by
+`StatTile` in [ui.tsx](../src/components/admin/ui.tsx) and fed by `getCollegeVerificationTotals` in
+[data/colleges.ts](../src/lib/admin/data/colleges.ts).
+
+`StatTile` is separate from `StatCard` on purpose. `StatCard` answers "how is this moving" and carries
+a delta against a previous period; a census answers "how much of the whole is this" and has no time
+axis, so it is a tile and not a chart.
+
+**Counts are directory-wide, never filtered.** Same convention as the filter-chip counts, and it is
+what makes the row usable as a filter: counts that tracked the current filter would read 0 on every
+tile except the one just clicked. The filtered figure is in the table footer. Archived rows are
+excluded, matching `listColleges` — a tile total that disagreed with the table under it would be
+worse than no tile at all.
+
+**Every status gets a tile, zero included.** A status that vanished when empty would stop the tiles
+summing to the total; "Rejected 0" is a statement worth making. This is also why the tiles do not
+follow the mockup they came from, which showed four statuses and omitted `not-verified` — with real
+data that hides 66 colleges and the six figures stop reconciling.
+
+**Colour sits on the glyph only.** The count and label wear ordinary slate ink. Tinting the number
+too would leave a reader who cannot separate rose from emerald with nothing to go on, and colour there
+is only a second copy of what the label already says. Tones come from `BADGE_TONES` via the same
+mapping `VerificationBadge` uses, so a status is not violet in the table and orange above it — the
+mockup's amber "Needs Review" was dropped for that reason.
+
+**Tile order is a colour constraint, not a taste one.** `VERIFICATION_STATUSES` order puts emerald
+next to rose, a pair deuteranopic readers separate by ΔE 5.8 — under the floor. Reading down from
+settled to rejected keeps them apart (worst adjacent pair becomes ΔE 6.4, inside the band that a
+visible label legalises) and every tile is labelled, so colour is never the sole cue.
+
+### 6.7 Admin chrome and theming
+
+The admin shell is [admin-shell.tsx](../src/components/admin/admin-shell.tsx) — a fixed navigation
+rail, a sticky 52px header holding the command palette and the account menu, and a content column
+that carries its own left padding so the rail can stay `fixed`. The rail itself is
+[admin-sidebar.tsx](../src/components/admin/admin-sidebar.tsx); it collapses to a 60px icon strip,
+and the collapsed flag lives in `AdminShell` because the content column has to shift with it.
+
+**Two levels, one open at a time.** The rail lists the nine sections and nothing else until one is
+opened; opening a section closes the previous one. Forty-odd destinations laid out flat was a wall
+nobody read, and an operator is only ever working inside one section. A closed section renders no
+children at all — they are absent from the DOM, not hidden with CSS.
+
+A section heading is a **disclosure, not a link**: there is no landing page behind "Institution
+Management", so making it navigate would mean inventing a destination. Everything stays reachable in
+one keystroke through the command palette regardless of what the rail has open.
+
+Which section is open is **derived, not synchronised**. The default is whichever section holds the
+current page — landing on a page with its section shut would hide the entry for the screen being
+looked at. A click overrides that, but the override records the path it was made on, so any navigation
+retires it and the new page's section opens by itself. That is deliberately not a `useEffect` copying
+the route into state: `react-hooks/set-state-in-effect` is an error in this repo, and the derived form
+has one source of truth. `activeSectionKey` resolves the owning section by longest path match,
+mirroring `navItemForPath`, so `/admin/colleges/123` opens Institution Management rather than the
+Dashboard section whose `/admin` href prefixes every admin path.
+
+In the 60px collapsed strip there is nowhere to put children, so a section icon click widens the rail
+*and* opens that section. A shut section holding the current page shows a blue dot in place of the
+open chevron, so "where am I" survives closing it.
+
+**One light-first surface.** The rail is `bg-white`, the page behind it `#f7f8fa`, separated by a
+`border-slate-200` hairline — the rail continues the content surface rather than opposing it. It was
+previously a hardcoded `bg-[#0b1220]` with no light or `dark:` variant, which is worth not repeating:
+a permanently dark rail cannot participate in a theme, and it forced every label on it to a colour
+that failed on any other background.
+
+**Dark mode is the OS setting, not a preference.** There is no theme toggle and no `data-theme`
+attribute anywhere; Tailwind's default `dark:` variant resolves through
+`@media (prefers-color-scheme: dark)`, so the OS is the only input. Anything added to the admin chrome
+therefore needs an explicit `dark:` pair — a bare light colour silently stays light on a dark page.
+
+**Dark values keep the rail above the page.** Content goes `slate-950` (`#020617`) and the rail
+`slate-900` (`#0f172a`), so the rail reads as the nearer surface. The old rail was *lighter* than the
+dark-mode content it sat against, which inverted that hierarchy.
+
+**Contrast floor.** Every text colour in the chrome clears WCAG AA (4.5:1). The values are picked for
+the surface they sit on, which is why they come in pairs: nav labels `slate-600` on white (7.6:1) and
+`slate-400` on `slate-900` (7.0:1); section headings `slate-500` on white (4.8:1); the active item
+`blue-700` on a `blue-50` pill (6.2:1) with a 2.5px `blue-600` bar at the rail's edge. `slate-400` is
+**not** a text colour on white — it measures 2.6:1 — though it is fine for a decorative dot.
+
 ## 7. Environment, commands, local setup
 
 Required env (see [.env.example](../.env.example)); the app throws a named error if either is missing:
@@ -649,8 +776,39 @@ profiles, so they land on the dashboard.
 | Script | When |
 | --- | --- |
 | `npm run seed:colleges` | once per environment, and after editing the curated list |
+| `npm run seed:admin` | to rebuild the whole admin demo dataset — **destructive**, see below |
+| `npm run create-admin` | to add one administrator, or reset its password, on any database |
 | `npm run ensure-indexes` | **production, after every schema change** — `autoIndex` is off there |
 | `npm run migrate:profiles` | once, on a database predating the `studentProfiles` collection |
+
+#### Administrator accounts
+
+Administrators live in `adminUsers`, not in `users` — see the model comment for why. There are two
+ways to get one.
+
+`npm run seed:admin` rebuilds the admin demo dataset: geography, institutions, academic structure,
+nine administrators across the nine role presets, jobs, flags, settings and an audit trail. It is
+**destructive for the collections it owns** and clears them on every run, so never point it at a
+database with real data. It leaves `courses`, `lessons` and `enrollments` alone. Seeded logins are
+`rajesh@edupilot.dev` (Super Admin) through `vikram@edupilot.dev`, password `Admin@12345`; the last
+two are deliberately left `invited` and `deactivated`, so they cannot sign in.
+
+`npm run create-admin` is the non-destructive alternative — it writes exactly two documents, the
+role it needs and the administrator, and is safe against a populated database. With no flags it
+creates `admin@edupilot.dev` / `Admin@2026` as Super Admin:
+
+```bash
+npm run create-admin
+npm run create-admin -- --email ops@edupilot.dev --name "Ops Lead" --role platform-admin
+npm run create-admin -- --email ops@edupilot.dev --password 'N3w:Password'
+```
+
+Flags: `--email`, `--name`, `--password`, `--role` (a role slug), `--team`, `--title`. Re-running it
+for an address that already exists resets that account's password, sets it `active` and clears any
+lockout, which is also the supported way to unlock an admin locked out by failed sign-ins. An
+existing role is reused untouched — it is never rewritten, because an operator may have edited its
+permissions deliberately — and a `--role` naming neither an existing role nor one of the nine presets
+is an error rather than a silently permission-less account.
 
 `npm run migrate:profiles` moves the old embedded `users.education` into `studentProfiles` and
 backfills `authProvider`. It is idempotent and non-destructive; re-run it with `-- --drop-legacy`

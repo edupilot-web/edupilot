@@ -210,6 +210,97 @@ export function Card({
 
 // ── KPI ────────────────────────────────────────────────────────────────────
 
+/**
+ * The tint and ink each tone lends a `StatTile` glyph.
+ *
+ * Deliberately the same six tones as `BADGE_TONES`, so a status that is violet
+ * on a badge in the table is violet on the tile above it. The ink is the 600
+ * step rather than the 500: at 500 both amber and emerald fall under 3:1 against
+ * white, which is the floor for a graphical mark.
+ */
+const TILE_TONES: Record<BadgeTone, string> = {
+  neutral: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+  success: "bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400",
+  warning: "bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-400",
+  danger: "bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400",
+  info: "bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400",
+  purple: "bg-violet-50 text-violet-600 dark:bg-violet-500/10 dark:text-violet-400",
+};
+
+/**
+ * A census tile: a glyph, a label, a count and its share of the whole.
+ *
+ * Distinct from `StatCard`, which answers "how is this moving" with a delta
+ * against a previous period. This one answers "how much of the whole is this",
+ * which needs no time axis — so it is a tile and not a chart.
+ *
+ * The colour sits on the glyph only. The count and the label wear ordinary ink,
+ * because colour here is a second copy of what the label already says: tinting
+ * the number as well would leave a reader who cannot separate rose from emerald
+ * with nothing, and would make the figure harder to read for everyone else.
+ */
+export function StatTile({
+  label,
+  value,
+  share,
+  tone = "neutral",
+  icon: Icon,
+  href,
+  active = false,
+}: {
+  label: string;
+  value: number;
+  /** Share of the total, already computed. Omitted on the total itself. */
+  share?: string;
+  tone?: BadgeTone;
+  icon: (props: { className?: string }) => ReactNode;
+  /** Makes the tile the way into this slice of the directory. */
+  href?: string;
+  /** This slice is the one currently filtered to. */
+  active?: boolean;
+}) {
+  const body = (
+    <>
+      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${TILE_TONES[tone]}`}>
+        <Icon className="h-[18px] w-[18px]" />
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[12px] font-medium text-slate-500 dark:text-slate-400">
+          {label}
+        </span>
+        <span className="mt-0.5 flex items-baseline gap-1.5">
+          <span className="text-[21px] font-semibold leading-none tracking-tight text-slate-900 tabular-nums dark:text-white">
+            {value.toLocaleString("en-IN")}
+          </span>
+          {share && (
+            <span className="text-[12px] leading-none text-slate-400 tabular-nums dark:text-slate-500">
+              {share}
+            </span>
+          )}
+        </span>
+      </span>
+    </>
+  );
+
+  const shell = `flex items-center gap-3 rounded-xl border bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:bg-slate-900 ${
+    active
+      ? "border-blue-300 ring-1 ring-blue-300 dark:border-blue-500/50 dark:ring-blue-500/40"
+      : "border-slate-200/80 dark:border-slate-800"
+  }`;
+
+  if (!href) return <div className={shell}>{body}</div>;
+
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "true" : undefined}
+      className={`${shell} transition hover:border-slate-300 hover:shadow-[0_2px_8px_rgba(15,23,42,0.06)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:hover:border-slate-700`}
+    >
+      {body}
+    </Link>
+  );
+}
+
 export function StatCard({
   label,
   value,

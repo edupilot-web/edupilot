@@ -8,7 +8,11 @@ import { Department, Program } from "@/models/AcademicStructure";
 import { StudentProfile } from "@/models/StudentProfile";
 import { AuditLog } from "@/models/AuditLog";
 import { District, State } from "@/models/Geo";
-import { RECORD_STATUSES } from "@/lib/admin/institution-fields";
+import {
+  RECORD_STATUSES,
+  VERIFICATION_STATUSES,
+  type VerificationStatus,
+} from "@/lib/admin/institution-fields";
 import {
   containsRegex,
   readEnumList,
@@ -239,6 +243,45 @@ export async function getCollegeFacets(params: SearchParams): Promise<{
       label: row.shortName || row.code || row.name,
     })),
   };
+}
+
+/**
+ * Verification census for the summary tiles.
+ *
+ * Directory-wide rather than filtered, for the same reason the facet counts
+ * above are: the tiles are a census of the whole directory and the way into each
+ * status, so a figure that moved with the current filter would mean something
+ * different on every visit. The filtered count is already in the table footer.
+ *
+ * Every status in `VERIFICATION_STATUSES` appears in the result, zero included.
+ * A status that disappeared when empty would stop the tiles summing to the
+ * total, and "none rejected" is itself worth saying.
+ *
+ * Archived rows are excluded, matching `listColleges` and the facets — a tile
+ * total that counted them would not agree with the table underneath it.
+ */
+export async function getCollegeVerificationTotals(): Promise<{
+  total: number;
+  byStatus: Record<VerificationStatus, number>;
+}> {
+  await connectDB();
+
+  const rows = await College.aggregate<{ _id: string | null; count: number }>([
+    { $match: { status: { $ne: "archived" } } },
+    { $group: { _id: "$verificationStatus", count: { $sum: 1 } } },
+  ]);
+
+  const byStatus = Object.fromEntries(
+    VERIFICATION_STATUSES.map((status) => [status, 0])
+  ) as Record<VerificationStatus, number>;
+
+  let total = 0;
+  for (const row of rows) {
+    total += row.count;
+    if (row._id && row._id in byStatus) byStatus[row._id as VerificationStatus] = row.count;
+  }
+
+  return { total, byStatus };
 }
 
 // ── Detail ─────────────────────────────────────────────────────────────────

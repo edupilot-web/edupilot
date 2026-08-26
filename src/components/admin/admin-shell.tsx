@@ -92,7 +92,7 @@ export function AdminShell({
                 <span className="block text-[12.5px] font-medium leading-tight text-slate-800 dark:text-slate-100">
                   {admin.name}
                 </span>
-                <span className="block text-[11px] leading-tight text-slate-400">
+                <span className="block text-[11px] leading-tight text-slate-500 dark:text-slate-400">
                   {admin.roleName}
                 </span>
               </span>
@@ -113,7 +113,7 @@ export function AdminShell({
                     <p className="truncate text-[12.5px] font-medium text-slate-800 dark:text-slate-100">
                       {admin.name}
                     </p>
-                    <p className="truncate text-[11.5px] text-slate-400">{admin.email}</p>
+                    <p className="truncate text-[11.5px] text-slate-500 dark:text-slate-400">{admin.email}</p>
                   </div>
                   <Link
                     href="/admin/security"
