@@ -447,10 +447,28 @@ export function ErrorState({ title, detail }: { title: string; detail?: string }
   );
 }
 
-export function InfoNote({ children }: { children: ReactNode }) {
+const NOTE_TONES = {
+  neutral:
+    "border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300",
+  warning:
+    "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200",
+} as const;
+
+export function InfoNote({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  /** `warning` for a condition an operator has to act on, not merely read. */
+  tone?: keyof typeof NOTE_TONES;
+}) {
   return (
-    <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] leading-relaxed text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300">
-      <InfoIcon className="mt-px h-4 w-4 shrink-0 text-slate-400" />
+    <div
+      className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-[12.5px] leading-relaxed ${NOTE_TONES[tone]}`}
+    >
+      <InfoIcon
+        className={`mt-px h-4 w-4 shrink-0 ${tone === "warning" ? "text-amber-500" : "text-slate-400"}`}
+      />
       <div>{children}</div>
     </div>
   );

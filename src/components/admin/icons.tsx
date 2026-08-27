@@ -244,4 +244,5 @@ export const ADMIN_SECTION_ICONS: Record<string, ComponentType<IconProps>> = {
   chart: ChartIcon,
   shield: ShieldIcon,
   settings: SettingsIcon,
+  spark: SparkIcon,
 };

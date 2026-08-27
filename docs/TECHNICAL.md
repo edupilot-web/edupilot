@@ -741,6 +741,154 @@ the surface they sit on, which is why they come in pairs: nav labels `slate-600`
 `blue-700` on a `blue-50` pill (6.2:1) with a 2.5px `blue-600` bar at the rail's edge. `slate-400` is
 **not** a text colour on white — it measures 2.6:1 — though it is fine for a decorative dot.
 
+### 6.9 AI Course Content — `src/lib/admin/ai/`
+
+An admin module that generates curriculum-aligned learning content for one subject, reviews it,
+versions it and publishes it. Phases 1 and 2 of the module spec: the academic cascade, structured
+generation, jobs, versioning, the review workflow and a real Gemini provider. Phases 3–5 (Ollama, RAG,
+the student-facing side) are not built; the seams for them are.
+
+**Two levels of the academic hierarchy did not exist.** The platform had College → Department → Program
+and a global `AcademicYear`, but no regulation, no subject and no year/semester coordinate —
+`regulation` and `syllabus` appeared nowhere in the codebase. [Curriculum.ts](../src/models/Curriculum.ts)
+adds `Regulation` and `CurriculumSubject` as an *extension*: every document points at the college,
+department and programme rows the academic module already owns, and nothing is re-declared.
+
+**"Course" is a degree, not a row.** `Program` already carries `degree` ("B.Tech") plus `departmentId`
+(the branch), so the specification's `Course → Branch` is a view over existing data rather than a new
+level to store. Step 2 of the cascade returns distinct degrees; step 3 returns the departments that have
+a programme of that degree, *and resolves `programId`* so no later call has to re-derive it. This is why
+all 642 existing programmes were reused with no migration.
+
+**A subject is keyed on (college, regulation, branch, code) — the branch included.** A first-year
+subject like MA101 is genuinely shared across CSE, IT and ECE, and each branch's curriculum lists it, so
+the correct shape is one row per branch. A key without `branchId` lets three branches upsert onto one
+document; two of them then lose the subject entirely while every write reports success.
+`academicYearId` is deliberately *not* on the subject: R23 semester 3 is the same subject list every
+year. The academic year belongs to the *content* generated for a cohort, not to the curriculum.
+
+**The cascade is seven server queries, not a static map**
+([data/curriculum.ts](../src/lib/admin/data/curriculum.ts)). Each step filters by everything chosen
+before it, and an incomplete coordinate returns *nothing* rather than something wider — dropping
+`branchId` from a subject query would answer with another branch's subjects, which is the exact leak the
+specification forbids.
+
+#### What the browser is not trusted with
+
+The generate request carries **ids only**. Any name or syllabus in the body is ignored:
+[context.ts](../src/lib/admin/ai/context.ts) re-resolves the whole chain from the database and verifies
+it *link by link* — programme belongs to the college, branch is that programme's department, regulation
+covers that degree, academic year falls inside the regulation's window, subject belongs to all of the
+above at that semester. The failure names which link broke, so the UI can point at the right dropdown.
+The job stores the **resolved** context, never the caller's payload.
+
+The prompt lives on the server for the same reason ([prompt.ts](../src/lib/admin/ai/prompt.ts)). A
+prompt the browser can see is one it can rewrite, and those rules are what stand between "generate this
+syllabus" and "generate anything". `PROMPT_VERSION` is stamped on every version and job — without it, a
+change to the wording makes every historical generation unexplainable.
+
+#### Structured output, not HTML
+
+[schema.ts](../src/lib/admin/ai/schema.ts) holds one zod schema per content type and derives the JSON
+Schema from it, so the two cannot drift. The zod object is the authority: a provider's constrained-decode
+mode reduces malformed responses but cannot eliminate them, and a truncated response still parses.
+Fields are `.nullable()` rather than optional throughout — a value the model could not source must
+arrive as an explicit null with an entry in `unavailable`, because a silently absent key is
+indistinguishable from one the prompt forgot to ask for.
+
+`syllabusUnitsCovered` is how grounding becomes *checkable* rather than merely requested: the model
+declares which supplied units it wrote about, and [validator.ts](../src/lib/admin/ai/validator.ts)
+rejects a response naming a unit the syllabus does not contain.
+
+#### The validation pipeline
+
+Schema → academic context → content → consistency → draft. Errors fail the job; warnings are stored and
+shown. The distinction matters: a hallucination check that quietly passed borderline content would be
+worse than no check, because it would give a reviewer false confidence.
+
+Citation shapes (page numbers, ISBNs, DOIs, standards numbers) are compared against the subject's own
+reference list rather than flagged on sight, so the check does not cry wolf on the books the curriculum
+prescribes. Endorsement phrases ("university-approved") are warnings, not errors — an exam-preparation
+document may legitimately mention the university syllabus.
+
+**Nothing in the pipeline can publish.** `requireAdminReview` in AI Settings does not gate that; there
+is simply no code path from generation to `status: "published"`. `academicallyApproved` defaults to
+false and is set in exactly one place: an administrator answering a prompt at approval time.
+
+#### Asynchronous by construction
+
+`requestGeneration` validates, checks for duplicates and creates a job; `runJob` does the slow work,
+invoked through `after()` from `next/server` so the response is already flushed. The browser gets a job
+reference in milliseconds and polls. `runJob` claims its job with a conditional update, so a
+request-triggered run and a retry cannot both call the model and bill twice for one document. The route
+sets `maxDuration = 300`, because `after` inherits the route's budget — without it a long generation is
+killed halfway and the job sticks in `processing`.
+
+`runJob` **re-resolves the context** rather than trusting the stored one: between queueing and running, a
+subject may have been remapped or a regulation archived.
+
+#### Duplicate prevention and versioning
+
+The content collection has a unique index on the full coordinate plus content type, so "content already
+exists" is a database guarantee rather than a race between two administrators. The check runs *before*
+generating, so the operator is offered Open / New version / Generate missing / Replace draft instead of
+being told after a model has been paid for.
+
+Every generation, edit and restore writes a version. **Restoring writes a new version holding the old
+payload** — it does not rewind a pointer, because that would erase the fact that the newer version ever
+existed. Restoring onto approved content sends it back to review: the approval was of a specific
+document. Published versions are immutable, and stay flagged after an unpublish, because they were live
+and that is a historical fact.
+
+#### Provider abstraction
+
+[provider.ts](../src/lib/admin/ai/provider.ts) is the seam. `generator.ts` never imports a vendor SDK
+and never reads a key; it asks for structured JSON and gets a `ProviderResult`. Credentials are read
+from `process.env` inside each provider at call time — never cached in a module variable (a long-lived
+server would keep serving a rotated key) and never from the config document, which the settings screen
+returns to the browser.
+
+`ProviderError` is a closed set because each code needs a distinct user-facing message and a different
+retry policy: a rate limit is worth retrying, a bad key never is. Gemini's `MAX_TOKENS` finish reason is
+treated as a **failure**, not a success — a truncated academic document is the most dangerous kind of
+success, since the JSON still parses and the units array is merely short.
+
+The **mock provider is the default**, and it is not a stub: it reads the syllabus back out of the prompt
+it was handed and builds schema-valid content from the real unit titles, so the whole pipeline can be
+exercised without a key. Everything it writes says it is placeholder text, and the publish endpoint
+refuses `provider: "mock"` outright.
+
+#### Permissions
+
+Six on `ai_course_content` (view, generate, edit, review, publish, delete) and two on `ai_settings`
+(view, manage). Publishing is separate by design: the PATCH endpoint refuses `status: "published"`
+outright, so there is exactly one path to live content and it needs its own grant. Content Admin gets
+generate, edit and review but **not** publish.
+
+#### Commands and configuration
+
+| | |
+| --- | --- |
+| `npm run seed:curriculum` | Regulations and subjects for six engineering colleges — idempotent |
+| `GEMINI_API_KEY` | Read from the environment. Never stored in the database, never returned by the API |
+
+The seeder is non-destructive: it upserts on natural keys and never touches colleges, departments,
+programmes or academic years. It seeds R23 and R20 for CSE, IT and ECE so the coordinate demonstrably
+matters — R23 CSE semester 3 has Data Structures, R20 has Data Structures through C++, and ECE has
+neither.
+
+Setting the key alone does nothing. A provider must also be **enabled** in AI Settings, because enabling
+one has a cost, and doing it automatically because a key happened to be present would start spending
+money without anyone choosing to.
+
+#### Not built
+
+The AI assistant panel (Improve / Simplify / Translate and the rest) is stubbed with an explanation
+rather than shown as disabled buttons that do nothing. Source-material upload and text extraction,
+embeddings and retrieval, and the student-facing consumption path are later phases; `AiContentSource`
+and the `embed()` slot on the provider interface exist so they can be added without reshaping the
+database.
+
 ## 7. Environment, commands, local setup
 
 Required env (see [.env.example](../.env.example)); the app throws a named error if either is missing:
@@ -777,6 +925,7 @@ profiles, so they land on the dashboard.
 | --- | --- |
 | `npm run seed:colleges` | once per environment, and after editing the curated list |
 | `npm run seed:admin` | to rebuild the whole admin demo dataset — **destructive**, see below |
+| `npm run seed:curriculum` | regulations and subjects for the AI module (§6.9) — idempotent |
 | `npm run create-admin` | to add one administrator, or reset its password, on any database |
 | `npm run ensure-indexes` | **production, after every schema change** — `autoIndex` is off there |
 | `npm run migrate:profiles` | once, on a database predating the `studentProfiles` collection |
