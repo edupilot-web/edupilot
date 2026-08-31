@@ -1,54 +1,91 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { AcademicForm } from "@/components/onboarding/academic-form";
-import { Stepper } from "@/components/onboarding/stepper";
+import { connectDB } from "@/lib/db";
+import { StudentProfile } from "@/models/StudentProfile";
+import { College } from "@/models/College";
+import { State } from "@/models/Geo";
+import { AcademicFlow, type Step } from "@/components/onboarding/academic-flow";
 import { getCurrentUser } from "@/lib/current-user";
-import { safeDestination } from "@/lib/redirects";
-import { withNext } from "@/lib/auth-routing";
 
-export const metadata: Metadata = { title: "Academic information · EduPilot" };
+export const metadata: Metadata = { title: "Your academic profile · EduPilot" };
 
+/**
+ * The academic half of onboarding (spec §7).
+ *
+ * One route rather than eleven. The flow's steps depend on each other and on
+ * what the chosen college actually has configured, so which steps exist is not
+ * known until the student is partway through — a route per step would have to
+ * encode a half-built profile in the URL to decide where to send them next.
+ *
+ * The page's job is to hand the client its saved state and the step to resume
+ * at. Everything after that is validated server-side on each save (§30, §33).
+ */
 export default async function AcademicStepPage(props: PageProps<"/onboarding/academic">) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+  // A finished profile has nothing to do here, and a bookmarked step must not
+  // become a way to overwrite one.
   if (user.profileCompleted) redirect("/dashboard");
 
-  const { next } = await props.searchParams;
-  const destination = next === undefined ? undefined : safeDestination(next);
+  await props.searchParams;
+  await connectDB();
 
-  // Step 2 saves into the row step 1 creates. Arriving here first — from a
-  // bookmark, or by typing the URL — has nothing to write to, so send them back
-  // rather than letting the form fail on submit.
-  if (!user.profile) redirect(withNext("/onboarding/education", destination));
+  /**
+   * Read the raw document rather than the profile view.
+   *
+   * `toView` predates the academic coordinate and returns only the fields the
+   * old two-step flow wrote, so resuming through it would silently drop the
+   * regulation, semester and subjects a student had already chosen.
+   */
+  const [saved, states, collegeCounts] = await Promise.all([
+    StudentProfile.findOne({ userId: user.id }).lean(),
+    State.find({}).select("name").sort({ name: 1 }).lean(),
+    College.aggregate<{ _id: unknown; n: number }>([
+      { $match: { status: "active" } },
+      { $group: { _id: "$stateId", n: { $sum: 1 } } },
+    ]),
+  ]);
+
+  /**
+   * Only states that actually have institutions are offered (§9).
+   *
+   * A student who picks a state and finds an empty college list reads that as a
+   * broken product rather than "not launched here yet", so the empty ones are
+   * named as coming soon instead.
+   */
+  const byState = new Map(collegeCounts.map((row) => [String(row._id), row.n]));
+  const available = states
+    .filter((state) => (byState.get(String(state._id)) ?? 0) > 0)
+    .map((state) => ({ value: String(state._id), label: state.name }))
+    .sort((a, b) => (byState.get(b.value) ?? 0) - (byState.get(a.value) ?? 0) || a.label.localeCompare(b.label));
+  const comingSoon = states
+    .filter((state) => (byState.get(String(state._id)) ?? 0) === 0)
+    .map((state) => state.name);
 
   return (
-    <div>
-      <Stepper current="academic" />
-
-      <div className="mt-6 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] sm:p-8 dark:border-slate-800 dark:bg-slate-900">
-        <p className="text-[12.5px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
-          Step 2 of 2
-        </p>
-        <h1 className="mt-1.5 text-[24px] font-bold tracking-tight text-slate-900 dark:text-white">
-          Academic information
-        </h1>
-        <p className="mt-1.5 text-[14px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Last one — this is what we use to time your placement prep and curriculum.
-        </p>
-
-        <div className="mt-6">
-          <AcademicForm
-            next={destination}
-            defaults={{
-              studyStatus: user.profile.studyStatus ?? "studying",
-              currentYear: user.profile.currentYear ? String(user.profile.currentYear) : "",
-              graduationYear: user.profile.graduationYear
-                ? String(user.profile.graduationYear)
-                : "",
-            }}
-          />
-        </div>
-      </div>
-    </div>
+    <AcademicFlow
+      initialStates={available}
+      comingSoonStates={comingSoon}
+      resumeStep={(saved?.onboardingStep as Step) || "state"}
+      defaults={{
+        stateId: saved?.stateId ? String(saved.stateId) : "",
+        collegeId: saved?.collegeId ? String(saved.collegeId) : "",
+        programId: saved?.programId ? String(saved.programId) : "",
+        branchId: saved?.branchId ? String(saved.branchId) : "",
+        regulationId: saved?.regulationId ? String(saved.regulationId) : "",
+        admissionYear: saved?.admissionYear ?? null,
+        admissionType: saved?.admissionType ?? "regular",
+        currentYear: saved?.currentYear ?? null,
+        currentSemester: saved?.currentSemester ?? null,
+        graduationYear: saved?.graduationYear ?? null,
+        subjectIds: (saved?.subjectIds ?? []).map((id) => String(id)),
+        /**
+         * The degree is the "course" the flow picks, and it is stored as a plain
+         * string. Resumed from the programme name where possible so the branch
+         * list can load immediately.
+         */
+        degree: saved?.programName?.split(" in ")[0]?.trim() || saved?.degree || "",
+      }}
+    />
   );
 }

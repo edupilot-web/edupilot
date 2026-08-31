@@ -137,6 +137,21 @@ const referenceBookSchema = new Schema(
     isbn: { type: String, default: null, trim: true, maxlength: 20 },
     /** Textbook or further reading — curricula distinguish the two. */
     kind: { type: String, enum: ["textbook", "reference"], default: "textbook" },
+
+    /**
+     * The catalogue row for this book, once one exists.
+     *
+     * The bibliography stays the source of what the syllabus *says* — a title
+     * and an ISBN, verbatim from the curriculum document. This pointer is how it
+     * reaches a book that has chapters and topics to read (`Textbook`), so the
+     * ninety subjects already carrying books do not have to be rewritten, and a
+     * book nobody has catalogued yet still displays exactly as it does today.
+     *
+     * Null is the normal state. It is not a foreign key the reader may rely on:
+     * the mapping that actually drives the subject screen is `SubjectTextbook`,
+     * which carries the unit-to-chapter alignment this field cannot.
+     */
+    textbookId: { type: Schema.Types.ObjectId, ref: "Textbook", default: null },
   },
   { _id: false }
 );

@@ -1,7 +1,15 @@
 import { DEFAULT_SIGNED_IN_DESTINATION, safeDestination } from "@/lib/redirects";
 
 export const VERIFY_EMAIL_PATH = "/verify-email";
-export const ONBOARDING_FIRST_STEP = "/onboarding/education";
+/**
+ * Onboarding now starts at the academic flow.
+ *
+ * The old `/onboarding/education` step asked for the college as free text; the
+ * academic flow collects it from the directory along with everything downstream,
+ * so starting there would ask for the same thing twice and then discard the
+ * typed version. The route is kept for anyone mid-flow on an old link.
+ */
+export const ONBOARDING_FIRST_STEP = "/onboarding/academic";
 export const ONBOARDING_SECOND_STEP = "/onboarding/academic";
 export const ONBOARDING_DONE_PATH = "/onboarding/complete";
 

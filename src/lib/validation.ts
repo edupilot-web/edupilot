@@ -8,6 +8,7 @@ import {
   STUDY_STATUSES,
   maxGraduationYear,
 } from "@/lib/user-fields";
+import { VERIFICATION_CODE_LENGTH } from "@/lib/verification-code";
 import { COURSE_LEVELS } from "@/models/Course";
 
 /**
@@ -169,6 +170,19 @@ export const changeEmailSchema = z.object({
     .min(1, "Enter your email address")
     .email("Enter a valid email address")
     .toLowerCase(),
+});
+
+export const verificationCodeSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    // Strip spaces and dashes before measuring: a code pasted out of an email
+    // arrives as "123 456" often enough that rejecting it would be our bug.
+    .transform((value) => value.replace(/[^0-9]/g, ""))
+    .refine((value) => value.length > 0, { message: "Enter the code from your email" })
+    .refine((value) => value.length === VERIFICATION_CODE_LENGTH, {
+      message: `Enter all ${VERIFICATION_CODE_LENGTH} digits`,
+    }),
 });
 
 export const courseCreateSchema = z.object({

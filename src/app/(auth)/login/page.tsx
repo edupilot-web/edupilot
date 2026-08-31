@@ -5,7 +5,8 @@ import { StudyingTogetherIllustration } from "@/components/auth/illustrations";
 import { LoginForm } from "@/components/auth/login-form";
 import { CubeIcon, SendIcon, UsersIcon } from "@/components/icons";
 import { authErrorMessage } from "@/lib/auth-errors";
-import { getSession } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/current-user";
+import { destinationFor } from "@/lib/auth-routing";
 import { safeDestination } from "@/lib/redirects";
 
 export const metadata: Metadata = {
@@ -38,8 +39,24 @@ export default async function LoginPage(props: PageProps<"/login">) {
   const { next, error } = await props.searchParams;
   const destination = safeDestination(next);
 
-  // Already signed in — no reason to show the form again.
-  if (await getSession()) redirect(destination);
+  /**
+   * Already signed in — send them where they belong.
+   *
+   * `getCurrentUser` rather than `getSession`: a token can verify perfectly for
+   * an account that no longer exists (a deleted user, a restored database), and
+   * redirecting on the token alone loops forever against the app shell, which
+   * bounces back here the moment it cannot load that user. Requiring the user to
+   * actually exist is what breaks that cycle — a stale cookie now falls through
+   * to the form and is replaced by the next sign-in.
+   *
+   * `destinationFor` rather than the raw `?next=`: it is the one function every
+   * other gate asks, so an unverified or half-onboarded account is sent straight
+   * to the right step instead of bouncing off the dashboard on the way.
+   */
+  const signedIn = await getCurrentUser();
+  // `next` arrives from a query string and may be repeated, so only a single
+  // string is honoured; `destinationFor` sanitises it either way.
+  if (signedIn) redirect(destinationFor(signedIn, typeof next === "string" ? next : null));
 
   return (
     <AuthShell

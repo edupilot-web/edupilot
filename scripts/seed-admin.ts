@@ -1056,7 +1056,7 @@ async function seedSystem(admins: SeededAdmin[]) {
     {
       level: "warn",
       source: "email",
-      message: "Postal responded 429: too many messages for this credential",
+      message: "Brevo responded 429 (too_many_requests): hourly sending limit reached",
       fingerprint: "email:rate-limit",
       occurrences: 41,
       lastSeenAt: daysAgo(2),

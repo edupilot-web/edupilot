@@ -12,6 +12,8 @@
     "seed:admin": "tsx --env-file=.env.local scripts/seed-admin.ts",
     "create-admin": "tsx --env-file=.env.local scripts/create-admin.ts",
     "seed:curriculum": "tsx --env-file=.env.local scripts/seed-curriculum.ts",
+    "seed:textbooks": "tsx --env-file=.env.local scripts/seed-textbooks.ts",
+    "sync:role-permissions": "tsx --env-file=.env.local scripts/sync-role-permissions.ts",
     "ensure-indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
     "migrate:profiles": "tsx --env-file=.env.local scripts/migrate-student-profiles.ts",
     "typecheck": "tsc --noEmit"

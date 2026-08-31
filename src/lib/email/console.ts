@@ -1,11 +1,11 @@
 import type { EmailMessage, EmailSendResult, EmailTransport } from "@/lib/email/types";
 
 /**
- * Development transport: prints the message — and, crucially, the link inside
- * it — to the server log instead of delivering it.
+ * Development transport: prints the message — and, crucially, the code and link
+ * inside it — to the server log instead of delivering it.
  *
- * This is what makes a fresh clone usable before anyone has stood up a Postal
- * server. It refuses to be the transport in production, where silently
+ * This is what makes a fresh clone usable before anyone has a Brevo API key.
+ * It refuses to be the transport in production, where silently
  * swallowing verification mail would strand every new account.
  */
 export const consoleTransport: EmailTransport = {
@@ -20,7 +20,14 @@ export const consoleTransport: EmailTransport = {
       return { ok: false, error: "The console transport is not usable in production" };
     }
 
-    const links = [...message.html.matchAll(/href="([^"]+)"/g)].map((match) => match[1]);
+    // The plain-text alternative, in full, rather than a scrape for links. Every
+    // template writes one and it holds whatever the recipient actually needs —
+    // the verification code as well as the URL — so this stays useful as new
+    // kinds of mail are added.
+    const body = message.text
+      .split("\n")
+      .map((line) => `  ${line}`)
+      .join("\n");
 
     console.info(
       [
@@ -28,7 +35,8 @@ export const consoleTransport: EmailTransport = {
         "──────── email (console transport, nothing was sent) ────────",
         `To:      ${message.to.name ? `${message.to.name} <${message.to.email}>` : message.to.email}`,
         `Subject: ${message.subject}`,
-        ...links.map((link) => `Link:    ${link}`),
+        "─────────────────────────────────────────────────────────────",
+        body,
         "─────────────────────────────────────────────────────────────",
         "",
       ].join("\n")

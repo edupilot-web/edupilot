@@ -1,5 +1,5 @@
 import { consoleTransport } from "@/lib/email/console";
-import { postalTransport } from "@/lib/email/postal";
+import { brevoTransport } from "@/lib/email/brevo";
 import { verificationEmail } from "@/lib/email/templates/verification";
 import type { EmailMessage, EmailSendResult, EmailTransport } from "@/lib/email/types";
 
@@ -7,12 +7,12 @@ import type { EmailMessage, EmailSendResult, EmailTransport } from "@/lib/email/
  * The only email entry point the rest of the application uses.
  *
  * Callers ask for "a verification email"; they never build a message, name a
- * provider, or see an API key. Postal is the default implementation behind
+ * provider, or see an API key. Brevo is the default implementation behind
  * this, and replacing it is a matter of adding a transport to the registry
  * below — the authentication code does not change.
  */
 const TRANSPORTS: Record<string, EmailTransport> = {
-  postal: postalTransport,
+  brevo: brevoTransport,
   console: consoleTransport,
 };
 
@@ -29,7 +29,7 @@ export function verificationTtlMinutes(): number {
 /**
  * Picks the transport.
  *
- * `EMAIL_TRANSPORT` wins when set. Otherwise Postal is used if it has
+ * `EMAIL_TRANSPORT` wins when set. Otherwise Brevo is used if it has
  * credentials, and development falls back to logging the message so a fresh
  * clone can complete a sign-up without a mail server.
  */
@@ -45,7 +45,7 @@ export function activeTransport(): EmailTransport {
     return transport;
   }
 
-  if (postalTransport.isConfigured()) return postalTransport;
+  if (brevoTransport.isConfigured()) return brevoTransport;
   return consoleTransport;
 }
 
@@ -84,7 +84,7 @@ async function send(message: EmailMessage): Promise<EmailSendResult> {
 }
 
 /**
- * Sends the "confirm your address" mail.
+ * Sends the "confirm your address" mail — code and link both.
  *
  * Resolves with `{ ok: false }` rather than throwing: a delivery failure must
  * not undo an account that was already created, and the caller's answer to it
@@ -93,11 +93,14 @@ async function send(message: EmailMessage): Promise<EmailSendResult> {
 export async function sendVerificationEmail(params: {
   email: string;
   name: string;
+  /** The 6-digit code the student types on the verification screen. */
+  code: string;
   verificationUrl: string;
   expiresInMinutes?: number;
 }): Promise<EmailSendResult> {
   const { subject, html, text } = verificationEmail({
     name: params.name,
+    code: params.code,
     verificationUrl: params.verificationUrl,
     expiresInMinutes: params.expiresInMinutes ?? verificationTtlMinutes(),
   });

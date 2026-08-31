@@ -27,7 +27,7 @@ Scope delivered so far:
 | Capability | State |
 | --- | --- |
 | Email + password accounts, three roles | done |
-| Email verification: hashed single-use tokens, TTL, resend, change address | done |
+| Email verification: 6-digit OTP screen + one-click link, hashed single-use, TTL, resend, change address | done |
 | Cookie session (sign in / out / who am I) | done |
 | Course CRUD, ownership enforcement | done |
 | Public catalogue: full-text search, filters, pagination | done |
@@ -37,7 +37,9 @@ Scope delivered so far:
 | Sign-in / sign-up screens | done |
 | Onboarding: education + academic steps, gated on `profileCompleted` | done |
 | College directory with search-as-you-type and free-text fallback | done |
-| Transactional email behind a transport interface (Postal, console) | done — Postal untested against a live server |
+| Student curriculum: derived year/semester, subject list, unit-wise syllabus and mapped textbook reading | done |
+| Textbook catalogue, topics, and subject-to-unit chapter mapping | done — seeded, no admin UI to edit it yet |
+| Transactional email behind a transport interface (Brevo, console) | done — API send confirmed live; inbox delivery untested |
 | Server-side rate limiting (verification sends) | done |
 | Continue with Google (OAuth 2.0 / OIDC) | implemented, untested against Google |
 | Signed-in shell: navigation rail, top bar, dashboard | done (dashboard cards show placeholder content) |
@@ -194,20 +196,23 @@ Nothing above `emailService.ts` knows which provider sends the mail. Callers ask
 email:
 
 ```ts
-await sendVerificationEmail({ email, name, verificationUrl })
+await sendVerificationEmail({ email, name, code, verificationUrl })
 ```
 
-Behind that sit three pieces: `types.ts` declares the `EmailTransport` contract, `postal.ts`
-implements it against [Postal](https://docs.postalserver.io)'s HTTP send API, and
-`templates/` renders subject, HTML and plain text. Replacing Postal with Resend, SES, Mailgun or
+Behind that sit three pieces: `types.ts` declares the `EmailTransport` contract, `brevo.ts`
+implements it against [Brevo](https://developers.brevo.com)'s transactional email API
+(`POST https://api.brevo.com/v3/smtp/email`, the key in an `api-key` header), and
+`templates/` renders subject, HTML and plain text. Replacing Brevo with Resend, SES, Mailgun or
 Postmark means adding one file that satisfies `EmailTransport` and naming it in `EMAIL_TRANSPORT` —
 no authentication code changes.
 
-`console.ts` is the third transport and the reason a fresh clone works: with no Postal credentials
-it prints the message and its verification link to the server log instead of sending. It refuses to
-run in production, where silently swallowing verification mail would strand every new account.
+`console.ts` is the third transport and the reason a fresh clone works: with no Brevo API key it
+prints the message's **whole plain-text body** — verification code and link both — to the server log
+instead of sending. It prints the text alternative rather than scraping the HTML so that it keeps
+working for kinds of mail that have no link in them. It refuses to run in production, where silently
+swallowing verification mail would strand every new account.
 
-Selection order: `EMAIL_TRANSPORT` if set, else Postal when it has credentials, else console.
+Selection order: `EMAIL_TRANSPORT` if set, else Brevo when it has a key, else console.
 
 **A send failure never fails the operation that triggered it.** `sendVerificationEmail` resolves
 with `{ ok: false }` and the caller carries on — see §6.4a for why that is the correct behaviour
@@ -239,6 +244,96 @@ either, so failing closed would turn one outage into a second, more confusing on
 
 The disabled button on the client is a courtesy, not a control — the action assumes nobody is using
 the button at all.
+
+
+### 3.7 Academic position — [src/lib/curriculum/position.ts](../src/lib/curriculum/position.ts)
+
+**Which year a student is in is derived, not stored.** `StudentProfile.currentYear` is a number the
+student typed once during onboarding and it is wrong from the next July onward. Both profiles in the
+database proved it: one said "1st year" against a 2023 admission, the other "2nd year" against 2024.
+
+`resolveAcademicPosition()` is the single answer, so the curriculum screen, the dashboard and cohort
+analytics cannot disagree within a semester. Precedence, strongest first:
+
+| Source | When it wins | Why it is ranked there |
+| --- | --- | --- |
+| `currentSemester` override | the student corrected their position | a transfer, a repeated year or a detained semester makes every formula wrong, and the student knows |
+| admission year | there is an `admissionYear` | self-maintaining: it stays right as terms roll over |
+| `currentYear` | nothing better exists | stale by construction, and returns a year with **no semester** rather than guessing which half |
+
+```
+academicYearStart = month >= July ? thisYear : thisYear - 1
+studyYear   = (academicYearStart - admissionYear) + 1 + (lateralEntry ? 1 : 0)
+currentSem  = (studyYear - 1) * 2 + (month >= July ? 1 : 2)   -> clamped to totalSemesters
+```
+
+The July boundary is deliberate: being wrong for the last fortnight of June costs less than a January
+boundary being a whole year wrong from July. Lateral entry adds a year because those students entered
+*into* the second year. The clamp matters — without it a stale 2015 admission resolves to semester 23
+and the subject query returns nothing with no indication why.
+
+`storedYearConflicts` reports the disagreement rather than hiding it, and `source` is returned so a
+screen can present a derived position as correctable instead of as settled fact.
+
+### 3.8 The textbook layer — [src/models/Textbook.ts](../src/models/Textbook.ts)
+
+`CurriculumSubject.referenceBooks[]` is a **bibliography**: a title, an author and an ISBN, verbatim
+from the syllabus document, with no structure to read from. Three collections add the structure, and
+they sit *beside* the curriculum rather than inside it:
+
+```
+CurriculumSubject -- units[] ------------------> the spine: exam scope, AI content address
+       |
+       +-- SubjectTextbook -- unitMappings[] --+
+                |                             | which chapters cover which unit
+                v                             |
+             Textbook -- chapters[] <---------+
+                |
+                +-- TextbookTopic   the reading material a student clicks
+```
+
+**The syllabus unit is the spine, not the book chapter.** [AiCourseContent](../src/models/AiCourseContent.ts)
+already addresses generated content by `(subjectId, unitNumber, topicNumber)` — positional syllabus
+addressing. Making chapters the primary structure would orphan every existing content row. It is also
+the right way round pedagogically: the exam follows the syllabus, the reading follows the book.
+
+| Collection | Shape | Why |
+| --- | --- | --- |
+| `textbooks` | book + **embedded** `chapters[]` | one row per book for the whole platform: Grewal is prescribed for dozens of subjects, and a row per (subject, book) gives forty spellings of one title. Chapters are embedded because they are pure structure, always read as a set, and will not grow fields — the same test `Curriculum.ts` applies to units |
+| `textbooktopics` | own collection | a topic is the leaf a student clicks and *will* grow: AI content, notes, videos, question banks, per-student progress. 200-300 per book, queried and aggregated independently, so embedding would load every field of every topic to render a contents list |
+| `subjecttextbooks` | mapping + `unitMappings[]` | see below |
+
+**The mapping is a table because units and chapters are many-to-many and out of order.** Unit 1 may
+span chapters 1-2; chapter 3 may serve units 2 *and* 4; a book written for another university covers
+the same ground in a different sequence. A `subjectId -> textbookId` pointer can only say "here is the
+book" — it cannot answer what a student is actually asking, which is "what do I read for Unit 3". The
+seeded ME401 Unit 3 maps to Arora chapters 4 **and** 12, which no foreign key could express.
+
+`unitMappings[].topicIds` is resolved at seed time rather than derived per request, so the read path
+does not redo the chapter-to-topic join on every page view.
+
+Two identities for a book, both indexed: `isbn13` under a **partial** unique index — Indian university
+editions frequently ship without one, and a plain unique index refuses the second null — and
+`(title, edition)` as the fallback, because the 43rd and 44th editions have different chapter
+numbering and a mapping built against one is wrong for the other.
+
+**`referenceBooks[]` gains an optional `textbookId`** rather than being replaced. The 274 bibliography
+entries that already exist keep their syllabus-stated title and ISBN, a book nobody has catalogued
+still renders exactly as before, and there is no migration to run.
+
+### 3.9 Per-semester subjects — [src/models/StudentSemester.ts](../src/models/StudentSemester.ts)
+
+`StudentProfile.subjectIds` is a flat array with no semester on it, so recording the fourth semester
+means overwriting the third — destroying the only record of what the student took. `StudentSemesterSubjects`
+is one row per `(studentProfileId, semester)`, carrying its own `regulationId` because a student moved
+onto a new regulation mid-course still took last semester's subjects under the old one.
+
+The profile field is **kept** as the current-semester cache: every existing write stays valid,
+onboarding does not change, and the read path prefers the collection when a row exists.
+
+Electives are not written on the student's behalf. `source` distinguishes `prescribed` (the
+regulation's core list, filled in silently) from `student-selected` and `admin-assigned`, and a null
+`confirmedAt` means the list was derived and never reviewed — an outstanding question, not a decision.
 
 ## 4. Data model
 
@@ -283,11 +378,16 @@ through a route that forgets one.
 `passwordHash` is required only when `googleId` is absent, so a Google account can exist without one.
 `authenticate()` treats a missing hash as a failed sign-in rather than comparing against `undefined`.
 
-**The verification token is stored as a SHA-256 hash, never in the clear.** A database dump is
-therefore useless for verifying anyone's address: the value that goes in the email cannot be
-recovered from the value that goes in the row. SHA-256 without a salt or a work factor is the right
-primitive here and not a shortcut — the input is already 32 bytes of `randomBytes`, so there is no
-low-entropy secret for a slow hash to protect.
+**Neither verification credential is stored in the clear**, so a database dump is useless for
+confirming anyone's address. The two are hashed differently, and the difference is the point:
+
+- The **link token** gets a bare SHA-256. No salt and no work factor is correct rather than lazy —
+  the input is already 32 bytes of `randomBytes`, so there is no low-entropy secret for a slow hash
+  to protect.
+- The **6-digit code** gets an **HMAC-SHA256 under a server secret** (`EMAIL_OTP_SECRET`, falling
+  back to `JWT_SECRET`, domain-separated by an `email-otp:v1:` label). A plain hash would not
+  protect it at all: a million pre-images is a sub-second sweep, so the dump has to be missing a
+  key, not merely missing a plaintext.
 
 Both TTL indexes are **housekeeping, not enforcement**. `mongod` sweeps on its own schedule, so
 `verifyEmailToken()` compares `expiresAt` itself rather than assuming an expired row is already gone.
@@ -332,10 +432,21 @@ nothing. That failure mode cost real debugging time; the reset is cheaper than r
    previous university still did.
 5. **The audit log is append-only.** Nothing in the application updates or deletes a row in
    `auditLogs`, and no admin screen offers to.
-6. **At most one live verification token per user** — `issueVerificationToken()` deletes the
-   outstanding ones before inserting, so a resend invalidates the previous link.
-7. **Verification tokens are single-use** — the row is deleted before `emailVerified` is set, so a
-   crash between the two leaves a dead link rather than a reusable one.
+5a. **A textbook exists once platform-wide** — `textbooks` is keyed on ISBN-13 (partial unique) or on
+   `(title, edition)`, never scoped to a college or subject. What varies per subject is the book's
+   role and the units it covers, which live on `subjecttextbooks`.
+5b. **A book cannot have two topic 1.3s** — `textbooktopics` is unique on
+   `(textbookId, chapterNumber, topicNumber)`, which is what makes the seeder converge on a re-run
+   instead of inserting duplicates.
+5c. **One mapping row per (subject, book)**, and a mapping never points at a unit the subject does not
+   have: the seeder drops those, because a mapping to unit 5 of a four-unit syllabus renders an empty
+   section and silently is the worst way for that to happen.
+6. **At most one live verification per user** — `issueVerification()` deletes the outstanding rows
+   before inserting, so a resend invalidates the previous code *and* the previous link. Both live
+   on one row, sharing an expiry and an attempt counter.
+7. **Verification credentials are single-use** — the row is deleted before `emailVerified` is set,
+   so a crash between the two leaves a dead code rather than a reusable one. Either credential
+   consumes the row, so using the link also spends the code.
 8. **One enrollment per (student, course)** — enforced by the unique index; POST also returns the
    existing row instead of erroring, making enroll idempotent.
 9. **Unique slug** — generated from the title, then `-2`, `-3`… until free; the unique index is the
@@ -462,7 +573,7 @@ Sign-up creates the **account**; onboarding collects the **student**. The two ar
 purpose — a sign-up form asking for a college is a form people abandon.
 
 ```
-SIGN UP ──┬── email + password ──► /verify-email  (§6.4a)
+SIGN UP ──┬── email + password ──► /verify-email  (6-digit code, §6.4a)
           │                              │ link followed
           └── Continue with Google ──────┤ (already verified — no link)
                                          ▼
@@ -515,18 +626,43 @@ own header offers Sign out.
 One route with two jobs, which is what makes a redirect loop impossible: there is no second page
 that could disagree about whether the address is confirmed.
 
-- **With `?token=`** it is the endpoint the emailed link points at.
-- **Without one** it is the "check your email" screen sign-up lands on.
+- **Without a token** it is the OTP screen sign-up lands on: six boxes, and the code from the email.
+- **With `?token=`** it is the endpoint the emailed one-click link points at.
 
-The token lifecycle ([email-verification.ts](../src/lib/email-verification.ts)):
+Both credentials are issued together by `issueVerification()` and stored on **one row**, so they
+share an expiry, an attempt counter, and a single resend. The code is what the screen asks for; the
+link is there because someone reading the mail in the browser they signed up from should not have to
+retype anything.
 
-1. 32 bytes from `crypto.randomBytes`, hex encoded — 256 bits in the link.
-2. Any outstanding token for that user is deleted, then the **SHA-256 hash** is stored with an
-   `expiresAt` (`EMAIL_VERIFICATION_TTL_MINUTES`, default 60).
-3. Following the link: shape-check the value, hash it, look up the row, compare in constant time,
-   check the expiry, confirm the user exists, delete the row, set `emailVerified`.
+The lifecycle ([email-verification.ts](../src/lib/email-verification.ts)):
 
-Four outcomes, four different screens:
+1. A **6-digit code** from `crypto.randomInt` — rejection-sampled by Node, so no modulo bias to
+   hand a guesser an edge — and a **32-byte token** from `crypto.randomBytes` for the link.
+2. Any outstanding row for that user is deleted, then the code's HMAC and the token's SHA-256 are
+   stored with an `expiresAt` (`EMAIL_VERIFICATION_TTL_MINUTES`, default 60) and `attempts: 0`.
+3. Typing the code: rate-limit the submission, load the row **by `userId`**, check the expiry,
+   compare the HMAC in constant time, delete the row, set `emailVerified`.
+4. Following the link: shape-check the value, hash it, look up the row by hash, compare in constant
+   time, check the expiry, confirm the user exists, delete the row, set `emailVerified`.
+
+**The code is looked up by user, never by value.** Two students can hold the same six digits at the
+same moment without either being able to use the other's, and there is no query here a stranger
+could aim at somebody else's account — which is also why the code path needs no enumeration
+defence of its own.
+
+Guessing is bounded twice over, because six digits is only a million possibilities:
+
+| Control | Value | Why it is not the other one's job |
+| --- | --- | --- |
+| `MAX_CODE_ATTEMPTS` on the row | 5 wrong codes, then the row is **destroyed** | The hard stop. Counted in the document because the rate limiter deliberately fails open, and this control must not. |
+| `CODE_ATTEMPTS_PER_HOUR` rate limit | 20 submissions per account per hour | Stops the per-code counter being refreshed indefinitely by resending. |
+| Resend caps (below) | 5 codes per user per hour | Bounds how many fresh five-attempt windows exist at all. |
+
+Five tries per code against five codes an hour is 25 guesses out of 1,000,000 — a 0.0025% chance in
+an hour of trying. A malformed or short code still costs an attempt: letting it through for free
+would give a guesser unlimited probes at the surrounding logic.
+
+Four outcomes for the **link**, four different screens:
 
 | Outcome | Shown | Way out |
 | --- | --- | --- |
@@ -538,14 +674,30 @@ Four outcomes, four different screens:
 Used, expired-and-swept, and never-valid all report **invalid** in the same words. Distinguishing
 them would tell whoever is holding the link something about the account behind it.
 
-The check-your-email screen offers **Resend email**, **Change email** and **Back to login**. Change
+What the **code** can come back as, all of it phrased for someone who mistyped, because that is who
+almost every one of them is: `incorrect` (with the tries remaining), `too-many-attempts` (the code
+was just destroyed), `expired`, `no-code`, `rate-limited`, `already-verified`. Each refusal empties
+the boxes; a success redirects through the same `destinationFor` as every other gate.
+
+The OTP screen ([otp-input.tsx](../src/components/auth/otp-input.tsx),
+[verify-email-panel.tsx](../src/components/auth/verify-email-panel.tsx)) submits **one hidden field**
+holding the joined digits — the six boxes are presentation, and the server never reassembles
+anything. Pasting into any box spreads across all of them, backspace walks backwards, `inputMode`
+brings up the numeric keypad, and `autoComplete="one-time-code"` lets a phone offer the code from
+its notification. Filling the last box submits on its own — dispatching a
+`FormData` built from the callback's digits rather than calling `requestSubmit()`, which would read
+the hidden field before React had committed the keystroke that completed it and post the previous
+value. Guarded on the pending flag so a paste cannot fire twice. A refused code clears the field by **changing the component's `key`** rather than
+through an effect, so there is no reset plumbing inside the component and no setState-in-effect.
+
+The screen also offers **Send a new code**, **Change email** and **Back to login**. Change
 is available only while the address is unverified — there is nothing of value behind an address
 nobody has confirmed, which is exactly what stops it being an account-takeover primitive. It drops
 any outstanding token, since that one was minted for the old address.
 
 **Delivery failure is a supported state, not an error path.** If the account is created and the mail
 does not go out, the user exists with `emailVerified: false` — a legitimate resting state — and the
-answer is "Resend email", not a second sign-up. This is the reason `sendVerificationEmail` resolves
+answer is "Send a new code", not a second sign-up. This is the reason `sendVerificationEmail` resolves
 `{ ok: false }` instead of throwing, and the reason sign-up does not roll back the account.
 
 Google accounts skip all of this: the provider has established the identity, so the account is
@@ -870,6 +1022,7 @@ generate, edit and review but **not** publish.
 | | |
 | --- | --- |
 | `npm run seed:curriculum` | Regulations and subjects for six engineering colleges — idempotent |
+| `npm run sync:role-permissions` | Grants existing roles the AI permissions their presets gained — **required after adding any permission module** |
 | `GEMINI_API_KEY` | Read from the environment. Never stored in the database, never returned by the API |
 
 The seeder is non-destructive: it upserts on natural keys and never touches colleges, departments,
@@ -881,6 +1034,23 @@ Setting the key alone does nothing. A provider must also be **enabled** in AI Se
 one has a cost, and doing it automatically because a key happened to be present would start spending
 money without anyone choosing to.
 
+#### Adding a permission module to an already-seeded database
+
+Roles are *data*. `ROLE_PRESETS` is written to the `roles` collection once, and is editable afterwards
+— so adding a permission module to the presets has **no effect** on a database that was already seeded.
+Super Admin keeps working because it holds the `*` wildcard; every other role silently lacks the new
+module, and the sidebar section simply does not appear for them.
+
+`npm run sync:role-permissions` closes that gap. It is additive and **only fills in a module the role
+has no permissions for at all**: if a role already holds any permission in a module, it is left
+completely alone, because an operator may have deliberately removed one and a sync that "restored" it
+from the preset would quietly undo a security decision. A module with nothing in it cannot be a curated
+state — it is a module that did not exist when the role was written. `--dry-run` prints the plan;
+`--module a,b` scopes it. Custom roles are never touched, and nothing is ever removed.
+
+Permissions are resolved per request rather than stored in the session cookie, so signed-in
+administrators pick up a change on their next page load without re-authenticating.
+
 #### Not built
 
 The AI assistant panel (Improve / Simplify / Translate and the rest) is stubbed with an explanation
@@ -888,6 +1058,152 @@ rather than shown as disabled buttons that do nothing. Source-material upload an
 embeddings and retrieval, and the student-facing consumption path are later phases; `AiContentSource`
 and the `embed()` slot on the provider interface exist so they can be added without reshaping the
 database.
+
+### 6.11 Student curriculum — `/curriculum`
+
+Two screens over the data model in 3.7-3.9. Both resolve the academic coordinate from the
+**profile**, server-side, and neither accepts one from the browser.
+
+**`/curriculum`** — [page.tsx](../src/app/(app)/curriculum/page.tsx),
+[curriculum-overview.tsx](../src/components/app/curriculum-overview.tsx). Header states the resolved
+position; body is the semester's subject cards with credits, unit and topic counts, the primary book
+and an estimated reading time.
+
+`getCurriculumOverview()` returns a **discriminated `CurriculumState`**, not a list plus a boolean.
+Each case gets its own words and its own way out, because these are different problems and answering
+all of them with "no data" is what makes an incomplete product look like a broken one:
+
+| State | What the student sees |
+| --- | --- |
+| `ready` | the subject grid |
+| `no-profile` | finish onboarding |
+| `graduated` | no current semester |
+| `no-regulation` | the college has no syllabus configured — nothing for them to do |
+| `no-subjects-for-branch` | the regulation exists, their branch is not filled in |
+| `no-semester` | we know the year but not which half; add an admission year |
+| `empty-semester` | other semesters exist, this one is not filled in |
+
+The last two are distinguished by a `countDocuments` on the coordinate without the semester —
+"we have no curriculum for you" and "this semester is empty" need different answers.
+
+A position with `source: "derived-from-admission"` is presented as **correctable**, with a link to the
+profile, and says so more loudly when `storedYearConflicts`. A derived semester shown as settled fact
+is how a student ends up revising the wrong syllabus without ever being given the chance to notice.
+
+**`/curriculum/[subjectId]`** — [subject-detail.tsx](../src/components/app/subject-detail.tsx). The
+**syllabus unit is the heading and the book sits inside it**, matching 3.8: the exam follows the
+syllabus, the reading follows the book. Each unit shows its syllabus topics, then "Read in <book>"
+with the mapped chapters and their topics (label, difficulty, minutes) — and, where a unit has no
+mapping, says so rather than rendering an empty section.
+
+Subjects the syllabus names but the catalogue does not hold appear under **Further reading**, with no
+chapters to open, and are excluded from the Textbooks list so no book is listed twice.
+
+**Ownership is part of the query, not a check after it.** `getSubjectView()` puts the profile's
+college, programme, branch and regulation into the `findOne`, so a subject belonging to another
+college is simply not found. A foreign id, a well-formed id that does not exist, and a malformed id
+all return **404** — verified against the running server, along with a 307 to `/login` with no
+session. Identical answers, so a probed URL cannot be used to learn what another college runs.
+
+### 6.10 Student academic onboarding — `src/lib/onboarding/`
+
+The academic identity a student builds at signup: state → institution → course → branch →
+regulation → batch → year/semester → subjects → graduation. It reads the **same curriculum data the
+admin module configures** (§6.9) rather than a parallel copy, so a subject an administrator adds
+appears in onboarding immediately.
+
+**Almost all of the hierarchy already existed.** `State`, `University` (44 rows, including every
+JNTU, OU, KU, TU, MGU, PU, SU, AU, SVU, ANU and YVU), and `College` — which already carried
+`institutionType`, `autonomyStatus`, `universityId` and `stateId`. `Program.degree` is the course and
+`Department` is the branch, exactly as in the AI module. Only three things were genuinely missing: the
+academic coordinate on `StudentProfile`, `CollegeRequest`, and a student-facing resolver.
+
+**The old free-text fields are kept, not replaced.** `collegeName`, `degree` and `specialization` are
+required on the schema and are read by the existing dashboard, so every write fills them from the
+resolved context. Profiles written before this module stay valid; profiles written after satisfy both
+readers.
+
+#### Steps with no data are skipped
+
+Six of 480 colleges have a curriculum configured. Requiring a regulation and subjects would leave
+students at the other 474 unable to finish onboarding at all, so `hasCurriculum` drives the shape of
+the flow: those students go state → institution → course → branch → batch → year → review, and
+`isAcademicallyComplete` does not ask for what their college cannot supply. The profile fills itself in
+later when an administrator adds the curriculum — nothing needs re-running.
+
+`nextStepFor` **derives** the resume step from what the profile holds rather than incrementing a
+counter. A number would point at the wrong step the moment the flow skipped one, and it is also what
+makes a closed browser resume correctly.
+
+#### Nothing the browser says is trusted
+
+`resolveStudentContext` verifies every relationship before anything is written (§30): the college is in
+the chosen state, the programme belongs to that college, the branch is that programme's department, the
+regulation belongs to that configuration, and **each subject belongs to the whole tuple** — college,
+programme, branch, regulation *and* semester. The subject check is one query carrying all six
+constraints rather than a fetch-then-compare, because a subject from another regulation would otherwise
+pass an existence check and be stored.
+
+Two things are deliberately *read* rather than accepted:
+
+- **Affiliation.** The university comes from the college, never from the request. A student could
+  otherwise claim a JNTUH affiliation for an unaffiliated college. A supplied id is compared against
+  the college's own and rejected if it disagrees.
+- **The current year.** Derived from the semester, so the two cannot disagree.
+
+An id that is *absent* is fine — the flow may not have reached that step. An id that is present but
+does not belong is a rejection, because it can only come from a stale form or a tampered request.
+
+#### Autosave and completion
+
+`PATCH /api/profile/academic` autosaves; `POST` submits. They share one handler, so **an autosave is
+validated exactly as strictly as a submit** — a laxer autosave path would be the way around every check
+above. Neither accepts a `profileCompleted` flag: completion is computed from the resolved context
+(§34), and the response echoes back the *server's* resolved names so the review screen shows the truth
+if the client's cached labels ever disagree.
+
+The client debounces at 900ms and stores `onboardingStep` on the profile, which is what a resumed
+session reads.
+
+#### Batch, lateral entry and graduation
+
+`admissionYear` is stored separately from the current year, because a 2023-batch third-year and a
+2025-batch first-year are both studying now and only the batch says which regulation applies to them.
+`admissionType: "lateral-entry"` subtracts a year from the derived graduation — those students enter in
+year 2, so a four-year course takes them three. The student's own graduation year always overrides the
+formula; a transfer or a repeated year makes the arithmetic wrong.
+
+A **superseded** regulation is selectable. An R20 student is still an R20 student after R23 arrives, and
+hiding the older code would lock out exactly the senior students who need the platform most. Only
+`archived` is refused.
+
+#### College requests
+
+`CollegeRequest` (§36) is deduplicated three ways: a partial unique index on `(userId, normalizedName)`
+scoped to `pending` — partial, so a student may legitimately re-ask after a rejection; a check against
+existing colleges under a different spelling, which returns the real row instead of filing a request an
+administrator would close as a duplicate; and a `requestCount` roll-up so the queue can be worked in
+order of how many students are blocked. `normalizeCollegeRequestName` strips punctuation and the words
+almost every Indian institution name contains, so "Aditya College of Engineering & Technology" and
+"Aditya College of Engineering and Technology" collide. Deliberately aggressive: a false collision costs
+one sentence in the queue, a missed one costs a duplicate row in the list everyone picks from.
+
+A request never becomes a `College` on its own — the directory is reference data other students select
+from, and a self-service path into it would fill it with duplicates within a week.
+
+#### Why one route, not eleven
+
+`/onboarding/academic` hosts the whole flow. Which steps exist is not known until the student has picked
+a college, so a route per step would have to encode a half-built profile in the URL to decide where to
+send them next. The state list is server-rendered, since it is the one thing every student sees and it
+never changes between requests.
+
+#### Not built
+
+Personal information (§8) still lives in the existing signup and Google flow; the flow starts at state.
+Backlog and completed-subject tracking (§45) is designed for — `subjectIds` is the current semester only
+— but not implemented. The admin screens for managing regulations and subjects are the AI module's
+(§6.9); there is no student-facing CSV import (§39).
 
 ## 7. Environment, commands, local setup
 
@@ -901,11 +1217,12 @@ Required env (see [.env.example](../.env.example)); the app throws a named error
 | `NEXT_PUBLIC_APP_URL` | public origin used to build links inside email; no trailing slash |
 | `GOOGLE_CLIENT_ID` | optional; OAuth client for "Continue with Google" |
 | `GOOGLE_CLIENT_SECRET` | optional; leave both unset to run without Google |
-| `EMAIL_TRANSPORT` | `postal` or `console`; unset auto-selects (Postal if configured, else console) |
-| `POSTAL_API_URL` | Postal origin only, no path — the client appends `/api/v1/send/message` |
-| `POSTAL_API_KEY` | a Postal **server** API key, sent as `X-Server-API-Key` |
-| `EMAIL_FROM`, `EMAIL_FROM_NAME` | From header; the domain must be one Postal may send for |
-| `EMAIL_VERIFICATION_TTL_MINUTES` | optional; link lifetime, default 60, capped at 1440 |
+| `EMAIL_TRANSPORT` | `brevo` or `console`; unset auto-selects (Brevo if configured, else console) |
+| `BREVO_API_KEY` | a Brevo API v3 key (`xkeysib-…`), sent as `api-key` |
+| `BREVO_TIMEOUT_MS` | optional; abort a Brevo request after this long, default 10000 |
+| `BREVO_FROM_EMAIL`, `BREVO_FROM_NAME` | From header; must be a sender Brevo has verified (`EMAIL_FROM`/`EMAIL_FROM_NAME` still work as fallbacks) |
+| `EMAIL_OTP_SECRET` | optional; HMAC key for the 6-digit code. Falls back to `JWT_SECRET` |
+| `EMAIL_VERIFICATION_TTL_MINUTES` | optional; code and link lifetime, default 60, capped at 1440 |
 | `MONGODB_AUTO_INDEX` | optional override; defaults on outside production, off in it |
 
 ```bash
@@ -964,23 +1281,36 @@ backfills `authProvider`. It is idempotent and non-destructive; re-run it with `
 once you have checked the result to remove the old fields. It reads through the raw driver, because
 the User model no longer declares those paths and Mongoose would strip them from the result.
 
+`npm run seed:textbooks` seeds the book catalogue, its topics and the subject mappings onto
+whatever `seed:curriculum` produced. Non-destructive and idempotent: it upserts its own three
+collections by their natural keys and never writes to colleges, programmes, regulations or subjects. A
+subject with no mapping is left alone — it still has its own syllabus units, which is the correct
+fallback and better than a book that covers nothing.
+
+`npm run seed:textbooks -- --fix-profiles` additionally attaches a regulation, resolves the semester
+and writes `studentsemestersubjects` for every completed profile. Opt-in behind the flag because it
+writes to live student rows, and it deliberately does **not** invent an `admissionYear` — that is the
+one field the derivation depends on, and guessing it would make every position downstream confidently
+wrong. Profiles without one are reported and skipped.
+
 Other scripts: `npm run build`, `npm start`, `npm run typecheck` (`tsc --noEmit`), `npm run lint`.
 
 ### Testing the email flow locally
 
-With `EMAIL_TRANSPORT=console` (the default without Postal credentials) the verification link is
-printed to the dev server log — `.next/dev/logs/next-development.log`, or the terminal running
+With `EMAIL_TRANSPORT=console` (the default without a Brevo key) the whole email — the 6-digit code
+and the link — is printed to the dev server log — `.next/dev/logs/next-development.log`, or the terminal running
 `npm run dev`. Sign up, copy the `Link:` line, open it.
 
-### Pointing it at Postal
+### Pointing it at Brevo
 
-1. In the Postal console, add the sending domain and publish the SPF, DKIM and return-path records
-   it gives you. Mail from an unauthenticated domain is filed as spam.
-2. Create a mail server, then **Credentials → New credential → type API**. That key is
-   `POSTAL_API_KEY`; it is scoped to that one mail server.
-3. `POSTAL_API_URL` is the console origin with no path, e.g. `https://postal.example.com`.
-4. Set `EMAIL_FROM` to an address on the verified domain, and `EMAIL_TRANSPORT=postal` (or leave it
-   unset — Postal is picked automatically once both credentials are present).
+1. In the Brevo dashboard, **SMTP & API → API keys → Generate a new key**. That value is
+   `BREVO_API_KEY`; it starts with `xkeysib-`.
+2. Register the sending address under **Senders, Domains & Dedicated IPs**. A single sender needs a
+   click on the confirmation mail Brevo sends it; a whole domain needs Brevo's DKIM and Brevo-code
+   records published. Brevo rejects a `sender` it has not verified, so this is not optional.
+3. Set `BREVO_FROM_EMAIL` to that verified address, `BREVO_FROM_NAME` to the display name, and
+   `EMAIL_TRANSPORT=brevo` (or leave it unset — Brevo is picked automatically once the key is
+   present).
 
 Page routes: `/login`, `/signup`, `/verify-email`, `/forgot-password`, `/terms`, `/privacy` are
 public; `/onboarding/*`, `/dashboard` and the thirteen other paths in
@@ -1041,17 +1371,30 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
     machinery rather than growing a second copy of it.
 13. **The verification link is consumed on `GET`.** A mail scanner that prefetches links will spend
     the token before the student clicks, who then sees "invalid" and has to resend. The alternative —
-    a landing page with a Confirm button — costs every user a click to protect against some. Worth
-    revisiting if it shows up in support traffic.
-14. Postal is implemented against its documented HTTP API but has **not been exercised against a
-    live server**. The console transport is what has been tested end to end.
+    a landing page with a Confirm button — costs every user a click to protect against some. Less
+    painful than it was: the same email carries a code, so a burnt link is now an inconvenience
+    rather than a dead end. Worth revisiting if it shows up in support traffic.
+14. Brevo's send path **has** been exercised against a live account: a real API key, a `POST` that
+    came back accepted, and `emailVerificationSent: true` out of `/api/auth/register`. What is still
+    unconfirmed is delivery to a real inbox — the test address was a `.invalid` domain, so Brevo
+    accepted the message and would then have bounced it. Deliverability from a `gmail.com` sender
+    (§the Brevo setup notes) is the open question, not the integration.
 15. The rate limiter uses fixed windows, so a burst straddling a boundary can reach 2x the limit.
     Acceptable for "do not flood a mailbox"; not acceptable if it is ever reused to meter an API.
+    The OTP's hard stop does not depend on it: `MAX_CODE_ATTEMPTS` lives on the row for exactly that
+    reason.
+15a. **The OTP path has been exercised against the database** — happy path, a pasted `"123 456"`,
+    the wrong-code countdown, attempt exhaustion, expiry, resend supersession, link and code sharing
+    one row, and a check that the stored hash is not a plain SHA-256 of the digits. The screen has
+    been fetched with a real session and asserted to render six labelled boxes, and the email
+    template renders a leading-zero code (`048317`) intact. What has **not** been done is a human
+    clicking through it in a browser: the auto-submit, paste-spreading and backspace behaviours are
+    reasoned about and type-checked, not observed.
 
 **Product / engineering**
 
 16. **No tests and no CI.** Nothing prevents a regression in the authorization rules above.
-17. UI covers sign-in, sign-up, verification, onboarding and the dashboard (§6). Thirteen sidebar destinations are placeholders,
+17. UI covers sign-in, sign-up, verification, onboarding, the dashboard and the curriculum (§6, §6.11). Twelve sidebar destinations are placeholders,
     the dashboard cards show static content (§6.5), and there is still no way to reach the
     instructor-only endpoints from a browser.
 18. `price` is stored and ignored; enrollment is free regardless. No payment integration.

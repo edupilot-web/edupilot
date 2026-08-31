@@ -20,6 +20,8 @@
  * inventing chapters.
  */
 
+import { MECH_SUBJECTS } from "./curriculum-mech";
+
 export type SeedUnit = {
   unitNumber: number;
   title: string;
@@ -210,6 +212,9 @@ const FIRST_YEAR: SeedSubject[] = [
  * would produce content for the wrong branch.
  */
 export const BRANCH_SUBJECTS: Record<string, SeedSubject[]> = {
+  /** Mechanical lives in its own module — see the note there on why it is fuller. */
+  MECH: MECH_SUBJECTS,
+
   CSE: [
   {
     name: "Data Structures",
@@ -604,7 +609,16 @@ export const R20_OVERRIDES: Record<string, SeedSubject[]> = {
 };
 
 /** Colleges the curriculum is seeded for, by code. */
-export const CURRICULUM_COLLEGE_CODES = ["ACET", "VRSEC", "RVRJC", "BEC", "AEC", "GVPCE"];
+export const CURRICULUM_COLLEGE_CODES = [
+  "ACET",
+  "VRSEC",
+  "RVRJC",
+  "BEC",
+  "AEC",
+  "GVPCE",
+  /** Added for the Mechanical branch: it has a MECH department and no curriculum. */
+  "SRKR",
+];
 
 /** First-year subjects are shared across every branch of a regulation. */
 export const SHARED_SUBJECTS = FIRST_YEAR;

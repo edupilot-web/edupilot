@@ -49,6 +49,7 @@ function branchKey(department: { code?: string | null; name: string }): string |
   if (name.includes("computer science")) return "CSE";
   if (name.includes("information technology")) return "IT";
   if (name.includes("electronics and communication")) return "ECE";
+  if (name.includes("mechanical")) return "MECH";
   return null;
 }
 
@@ -207,7 +208,7 @@ async function main(): Promise<void> {
   console.log(`regulations upserted : ${regulationCount}`);
   console.log(`subjects upserted    : ${subjectCount}`);
   if (skippedBranches) {
-    console.log(`branches with no curriculum data: ${skippedBranches} (only CSE, IT and ECE are seeded)`);
+    console.log(`branches with no curriculum data: ${skippedBranches} (only CSE, IT, ECE and MECH are seeded)`);
   }
 
   const totals = await CurriculumSubject.aggregate([

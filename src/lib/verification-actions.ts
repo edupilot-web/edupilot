@@ -6,18 +6,22 @@ import { changeUnverifiedEmail } from "@/lib/accounts";
 import { startSession } from "@/lib/auth";
 import { destinationFor, VERIFY_EMAIL_PATH, withNext } from "@/lib/auth-routing";
 import { getCurrentUser } from "@/lib/current-user";
-import { sendVerification } from "@/lib/email-verification";
+import { MAX_CODE_ATTEMPTS, sendVerification, verifyEmailCode } from "@/lib/email-verification";
 import { formatRetryAfter } from "@/lib/rate-limit";
-import { changeEmailSchema } from "@/lib/validation";
+import { changeEmailSchema, verificationCodeSchema } from "@/lib/validation";
 
 /**
  * What the check-your-inbox screen renders. `status` drives the tone of the
  * banner — the same screen reports a successful resend and a refused one.
+ *
+ * `clearCode` asks the OTP boxes to empty themselves: a wrong code should leave
+ * the student typing a new one, not editing the old one digit by digit.
  */
 export type VerificationFormState = {
   status?: "sent" | "error" | "info";
   message?: string;
   errors?: Record<string, string[] | undefined>;
+  clearCode?: boolean;
 };
 
 const GENERIC_FAILURE = "Something went wrong on our end. Please try again.";
@@ -162,6 +166,99 @@ export async function changeEmailAction(
     console.error("[auth] could not change the unverified email:", err);
     return { status: "error", message: GENERIC_FAILURE };
   }
+}
+
+/**
+ * Checks the code the student typed and, when it holds up, moves them on.
+ *
+ * The redirect is deliberately outside the `try`: `redirect` works by throwing,
+ * so calling it inside would have the catch below turn a successful
+ * verification into "something went wrong on our end".
+ *
+ * Every refusal is phrased for someone who mistyped, because that is who almost
+ * all of them are. Nothing here reveals whether a code exists for a different
+ * account — there is no lookup by code at all, only against the signed-in user.
+ */
+export async function verifyCodeAction(
+  _prevState: VerificationFormState | undefined,
+  formData: FormData
+): Promise<VerificationFormState> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const next = text(formData, "next");
+
+  if (!user.needsEmailVerification) {
+    redirect(destinationFor(user, next));
+  }
+
+  const parsed = verificationCodeSchema.safeParse({ code: text(formData, "code") });
+  if (!parsed.success) {
+    return { errors: z.flattenError(parsed.error).fieldErrors };
+  }
+
+  let outcome: Awaited<ReturnType<typeof verifyEmailCode>>;
+  try {
+    outcome = await verifyEmailCode(user.id, parsed.data.code);
+  } catch (err) {
+    console.error("[auth] could not check the verification code:", err);
+    return { status: "error", message: GENERIC_FAILURE };
+  }
+
+  switch (outcome.status) {
+    case "verified":
+    case "already-verified":
+      // Past the gate. `destinationFor` decides where that leads — onboarding
+      // for a new account, or wherever they were originally headed.
+      break;
+
+    case "incorrect":
+      return {
+        errors: {
+          code: [
+            outcome.attemptsRemaining === 1
+              ? "That code is not correct. One more try before we cancel it."
+              : `That code is not correct. ${outcome.attemptsRemaining} tries left.`,
+          ],
+        },
+        clearCode: true,
+      };
+
+    case "too-many-attempts":
+      return {
+        status: "error",
+        message: `That code was cancelled after ${MAX_CODE_ATTEMPTS} incorrect attempts. Send yourself a new one to continue.`,
+        clearCode: true,
+      };
+
+    case "expired":
+      return {
+        status: "error",
+        message: "That code has expired. Send yourself a new one and we'll email it straight away.",
+        clearCode: true,
+      };
+
+    case "no-code":
+      return {
+        status: "error",
+        message: "We don't have a code waiting for this account. Send yourself a new one.",
+        clearCode: true,
+      };
+
+    case "rate-limited":
+      return {
+        status: "error",
+        message: `Too many attempts. Please try again ${formatRetryAfter(outcome.retryAfterSeconds)}.`,
+        clearCode: true,
+      };
+  }
+
+  redirect(
+    destinationFor(
+      { needsEmailVerification: false, profileCompleted: user.profileCompleted },
+      next
+    )
+  );
 }
 
 /** Re-reads the account and moves on if the link has since been followed. */

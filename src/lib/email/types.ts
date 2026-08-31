@@ -1,7 +1,7 @@
 /**
  * The contract between the application and whatever actually delivers mail.
  *
- * Nothing above this file knows that Postal exists: swapping in Resend, SES or
+ * Nothing above this file knows that Brevo exists: swapping in Resend, SES or
  * Postmark means adding one module that satisfies `EmailTransport` and naming
  * it in `EMAIL_TRANSPORT`, with no change to the authentication flow.
  */

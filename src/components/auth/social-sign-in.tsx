@@ -1,21 +1,23 @@
-"use client";
-
-import { useState } from "react";
-import { AppleIcon, GoogleIcon, MicrosoftIcon } from "@/components/icons";
+import { GoogleIcon } from "@/components/icons";
 
 const BUTTON =
   "flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-200 bg-white py-2.5 text-[14px] font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800";
 
 /**
- * The three social buttons from the design.
+ * Social sign-in: Google only.
  *
- * Google is wired to the real OAuth flow (`/api/auth/google/start`). Microsoft
- * and Apple have no client credentials or callbacks, so rather than pretend,
- * they say so and point the user back at email and password.
+ * Microsoft and Apple buttons were here and are gone. They had no client
+ * credentials and no callback route, so they could only ever say "not connected
+ * yet" — and a button that exists to explain that it does not work costs a
+ * reader more than its absence does. Every provider offered here is one that
+ * actually completes a sign-in.
+ *
+ * No client state remains, so this is plain markup with no directive. It is
+ * still compiled into the client bundle, because both callers — the login and
+ * signup forms — are client components; what has gone is the state and the
+ * handlers, not the module.
  */
 export function SocialSignIn({ label, next }: { label: string; next?: string }) {
-  const [unavailable, setUnavailable] = useState<string | null>(null);
-
   const googleHref = next
     ? `/api/auth/google/start?next=${encodeURIComponent(next)}`
     : "/api/auth/google/start";
@@ -33,30 +35,11 @@ export function SocialSignIn({ label, next }: { label: string; next?: string }) 
         </div>
       </div>
 
-      {unavailable && (
-        <p
-          role="status"
-          className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
-        >
-          {unavailable} sign-in is not connected yet. Please use your email and password.
-        </p>
-      )}
-
       {/* A full navigation, not a client-side one: this leaves the app for Google. */}
       <a href={googleHref} className={BUTTON}>
         <GoogleIcon className="h-[18px] w-[18px] shrink-0" />
         Continue with Google
       </a>
-
-      <button type="button" onClick={() => setUnavailable("Microsoft")} className={BUTTON}>
-        <MicrosoftIcon className="h-[18px] w-[18px] shrink-0" />
-        Microsoft
-      </button>
-
-      <button type="button" onClick={() => setUnavailable("Apple")} className={BUTTON}>
-        <AppleIcon className="h-[18px] w-[18px] shrink-0" />
-        Apple
-      </button>
     </div>
   );
 }
