@@ -610,8 +610,8 @@ is the authority; `proxy.ts` (§6.5) only does the cheap cookie check in front o
 `getCurrentUser()` ([current-user.ts](../src/lib/current-user.ts)) is wrapped in React's `cache`, so
 the layout and the page inside it share one query per request rather than each issuing their own.
 
-Seven of the sixteen sidebar destinations are built: `/dashboard`, `/curriculum`, `/assignments`,
-`/notes`, `/notifications`, `/profile` and `/settings`. The other nine render
+Eight of the sixteen sidebar destinations are built: `/dashboard`, `/curriculum`, `/assignments`,
+`/notes`, `/notifications`, `/profile`, `/settings` and `/wallet`. The other eight render
 [ComingSoon](../src/components/app/coming-soon.tsx), which names the section, says what it will do and
 states plainly that it is not built — so no sidebar entry is a dead link and none of them pretends to
 work. Each is a real route file, ready to be replaced by the actual screen. They are listed with
@@ -2030,6 +2030,123 @@ AI-assisted grading (§44 defers both). The S3 driver. `NoteRecipient` rows are
 written at publish time only, so a student who joins a cohort afterwards does
 not retroactively receive earlier notes.
 
+### 6.14 Payments and the campus wallet — `src/lib/payments/`
+
+Students add money with Razorpay and spend it on campus services. One wallet per user, one
+append-only ledger behind it.
+
+#### Money is integer paise
+
+Not rupees, and never a float. `0.1 + 0.2 !== 0.3` in IEEE 754, and a wallet that accumulates a
+thousandth of a rupee per top-up is one that gets reconciled by hand. Razorpay's API is denominated in
+paise too, so storing anything else would mean converting on every call in both directions — which is
+exactly where the rounding error would live. Every field holding money is named `...Paise`, so a bare
+`amount` is visibly wrong at the call site.
+
+#### The ledger is the truth; the balance is a cache
+
+Two collections, and the split is the whole design. `WalletTransaction` is **append-only**: nothing
+edits or deletes a row, and a correction is another row. `Wallet.balancePaise` is a cached total
+maintained by `$inc`, because "what can I spend" is asked on every page load and summing a student's
+whole history to answer it gets slower every term.
+
+That ordering matters. If the two ever disagree the ledger wins and `reconcileWallets()` recomputes the
+cache from it; a design where the balance *is* the truth has no way back from a single bad write.
+
+`amountPaise` is **signed** — positive credits, negative debits — so the balance is `sum(amountPaise)`,
+one expression, impossible to get backwards. A direction stored in its own field would be a second
+source of truth about which way the money went, and the two can disagree.
+
+#### Two invariants, both enforced by the database
+
+**A credit lands at most once.** A unique index on `WalletTransaction.idempotencyKey`
+(`razorpay:payment:pay_XYZ`). Razorpay delivers webhooks at least once and retries anything non-2xx, so
+"the same payment arrives twice" is the expected case, not an edge case. A check-then-write would let
+two concurrent deliveries both through; the index lets exactly one, and the loser reads the winner's
+row.
+
+**A debit cannot overdraw.** The balance condition lives *inside* the update's filter, so "check the
+balance" and "reduce the balance" are one atomic operation. Ten concurrent ₹60 spends against ₹100
+leave exactly one succeeding. Both are
+[tested against a real database](../tests/integration/wallet-ledger.test.ts), because both are
+properties of MongoDB under concurrency rather than of the TypeScript.
+
+#### The crash window is deliberate, and recorded
+
+Crediting is two writes — insert the ledger row, then move the balance — and a process that dies between
+them leaves money recorded but not landed. Rather than pretend the window does not exist, the row
+carries `appliedAt: null` until the balance actually moves, and reconciliation looks for exactly that.
+
+The **order** is the safety property. Inserting first means a retry collides on the idempotency key and
+does nothing, so the failure mode is a *missing* credit: detectable, recoverable, and fixed by
+`npm run reconcile:wallets`. Incrementing first would make the same crash a double credit, which
+nothing can detect afterwards. Under-crediting is recoverable; over-crediting is not.
+
+#### The webhook is authoritative; the browser is a convenience
+
+`/api/wallet/verify` exists so the balance moves while the student is still looking at the screen.
+`/api/webhooks/razorpay` is what actually guarantees a paid wallet gets credited, because it does not
+depend on the student keeping a tab open, their network surviving the redirect, or their browser
+running our JavaScript. If the verify endpoint were deleted tomorrow no money would be lost.
+
+Both end in one function, `settlePayment()`, so the two paths cannot disagree about what a settled
+payment means.
+
+**The amount is never taken from either of them.** It is written onto our `PaymentOrder` row when the
+order is created and read back from there at settlement. A client that could send an amount at
+verification time could pay ₹10 and be credited ₹10,000 — and no signature check would catch it, because
+the signature is over ids, not amounts. Razorpay is also re-asked what the payment is worth: a
+signature proves a message came from Razorpay, not that the payment is still captured.
+
+#### Three credentials, and they are not interchangeable
+
+| Variable | Secret? | Used for |
+| --- | --- | --- |
+| `RAZORPAY_KEY_ID` | no — it reaches the browser | naming the account at checkout |
+| `RAZORPAY_KEY_SECRET` | yes | API auth, and the checkout callback signature |
+| `RAZORPAY_WEBHOOK_SECRET` | yes | the webhook signature, and only that |
+
+The webhook secret is separate in Razorpay's own design. Conflating it with the key secret is a common
+mistake and fails verification for *every* webhook, which reads as Razorpay being broken rather than as
+a configuration error.
+
+Test or live is read from the **key prefix**, not from a separate flag. A `RAZORPAY_MODE` variable
+beside the keys is one that can disagree with them, and the direction it disagrees in — a live key with
+the mode left on "test" — takes real money while every screen says sandbox.
+
+Signatures are compared with `timingSafeEqual`. `===` on a string returns as soon as two characters
+differ, and that timing is measurable across enough requests — which is a way to derive a valid
+signature one character at a time.
+
+#### Degradation
+
+With no keys, `/wallet` still works: the balance, the statement and every read path are real, and only
+"Add money" is unavailable — with the screen saying so rather than showing a button that fails on tap.
+A test deployment says **Test mode** on screen, because a wallet that looks identical in test and live
+is how somebody eventually demonstrates a "payment" using a real card.
+
+#### Refunds
+
+Checked twice before Razorpay is called, because money in a wallet is fungible — a student may have
+topped up ₹500 and spent ₹400. Against the **payment**, since Razorpay will not return more than was
+taken; and against the **balance**, since returning money already spent on campus would leave the
+wallet negative and the platform out of pocket.
+
+The wallet is debited when `refund.processed` arrives, not when the refund is requested: a refund can
+be requested and then fail at the bank, and debiting on request would leave a student short of money
+that never left.
+
+`payment.refund` is its own permission, and `payment.adjust` is deliberately **not** in any preset
+below Super Admin. A refund leaves a matching record at Razorpay and is reconcilable from outside this
+system; an adjustment invents a balance with nothing behind it.
+
+#### Not built
+
+Nothing calls `debitWallet()` yet. It is exported, tested and ready for a canteen till, a library fine
+or a hostel fee — but there is no campus service to spend on, and building a checkout for one that does
+not exist would be guessing at its flow. Subscriptions, saved cards and payment links are not
+implemented; none of them is needed for a wallet.
+
 ## 7. Environment, commands, local setup
 
 Required env (see [.env.example](../.env.example)); the app throws a named error if either is missing:
@@ -2053,6 +2170,9 @@ Required env (see [.env.example](../.env.example)); the app throws a named error
 | `GOOGLE_VERTEX_SERVICE_ACCOUNT_JSON` | optional; raw JSON or base64. Unnecessary on Google Cloud |
 | `GOOGLE_VERTEX_LOCATION` | optional; `global` by default, which avoids per-region model availability |
 | `GEMINI_API_KEY` | optional; the AI fallback, and the admin generator. Never stored in the database |
+| `RAZORPAY_KEY_ID` | optional; public, reaches the browser. Test or live is read from its prefix |
+| `RAZORPAY_KEY_SECRET` | optional; API auth and the checkout signature. Never returned by any endpoint |
+| `RAZORPAY_WEBHOOK_SECRET` | optional; a DIFFERENT secret. Without it the webhook refuses to act |
 | `AI_DEFAULT_PROVIDER`, `AI_DEFAULT_MODEL` | the tutor's everyday model — Basic, Practical, Intermediate |
 | `AI_ADVANCED_PROVIDER`, `AI_ADVANCED_MODEL` | used only for Advanced and Expert, and dropped past 80% of the budget |
 | `AI_FALLBACK_PROVIDERS` | comma-separated chain, `provider` or `provider:model`; unknown names are ignored |

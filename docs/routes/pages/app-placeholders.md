@@ -1,4 +1,4 @@
-# The nine unbuilt signed-in routes
+# The eight unbuilt signed-in routes
 
 | | |
 | --- | --- |
@@ -6,7 +6,7 @@
 | Access | session required, exactly like `/dashboard` |
 | Rendering | static Server Components — no session read of their own, no database access |
 
-Seven of the sixteen destinations in the sidebar are built. The other nine are
+Eight of the sixteen destinations in the sidebar are built. The other eight are
 real route files that render
 [ComingSoon](../../../src/components/app/coming-soon.tsx). They are documented together because
 they are the same four-line file with a different `APP_ROUTES` constant — nothing about them
@@ -26,7 +26,6 @@ placeholder page shows as its description.
 | `/notice-board` | Notice Board | Academics | `Notice Board · EduPilot` | Announcements from the department and the college, newest first. |
 | `/events` | Events | Campus | `Events · EduPilot` | Workshops, fests and guest lectures you can register for. |
 | `/placements` | Placements | Campus | `Placements · EduPilot` | Open roles, eligibility, and the status of every application you have made. |
-| `/wallet` | Campus Wallet | Campus | `Campus Wallet · EduPilot` | Balance, top-ups and a statement of campus spending. |
 | `/refer` | Refer & Earn | Campus | `Refer & Earn · EduPilot` | Invite a friend to EduPilot and track the rewards you have earned. |
 | `/service-requests` | Service Requests | Support | `Service Requests · EduPilot` | Raise a request for documents, hostel or IT support and follow its progress. |
 

@@ -72,6 +72,16 @@ export function ChartIcon(props: IconProps) {
   );
 }
 
+export function WalletIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H18a1 1 0 0 1 1 1v2" />
+      <path d="M3 7.5v10A2.5 2.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 18.5 8H5.5" />
+      <path d="M16.5 14h.01" />
+    </Outline>
+  );
+}
+
 export function UploadIcon(props: IconProps) {
   return (
     <Outline {...props}>
@@ -245,4 +255,5 @@ export const ADMIN_SECTION_ICONS: Record<string, ComponentType<IconProps>> = {
   shield: ShieldIcon,
   settings: SettingsIcon,
   spark: SparkIcon,
+  wallet: WalletIcon,
 };

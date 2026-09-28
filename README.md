@@ -27,6 +27,7 @@ Documentation, and keep it updated alongside any behaviour change:
 | Forms      | Server Actions + `useActionState`        |
 | AI         | Provider-agnostic seam; Vertex AI (primary), Gemini, DeepSeek, Groq, OpenAI or a mock |
 | Files      | Storage-driver seam; local disk today, S3-shaped slot |
+| Payments   | Razorpay: wallet top-ups, an append-only ledger, webhook settlement |
 
 ## Getting started
 
@@ -50,6 +51,7 @@ Scheduled work:
 
 ```bash
 npm run reminders            # assignment deadline reminders — run every 15-60 minutes
+npm run reconcile:wallets    # wallet balances against the ledger — run every 15-30 minutes
 ```
 
 There is no scheduler inside the app. A web app with no worker process cannot hold one

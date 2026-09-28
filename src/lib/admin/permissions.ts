@@ -151,6 +151,22 @@ export const PERMISSION_MODULES: PermissionModule[] = [
     ],
   },
   {
+    key: "payment",
+    label: "Payments & Wallets",
+    blurb: "Student wallets, the transaction ledger and refunds.",
+    actions: [
+      { key: "view", label: "View", description: "See wallets, balances and the transaction ledger" },
+      { key: "refund", label: "Refund", description: "Send money back to the card it came from" },
+      {
+        key: "adjust",
+        label: "Adjust",
+        description: "Change a balance by hand, with a recorded reason",
+      },
+      { key: "freeze", label: "Freeze", description: "Put a wallet on hold, or take it off hold" },
+      { key: "export", label: "Export", description: "Download the ledger for reconciliation" },
+    ],
+  },
+  {
     key: "ai_course_content",
     label: "AI Course Content",
     blurb: "AI-generated curriculum content: generating, reviewing and publishing it.",
@@ -276,6 +292,16 @@ export const ROLE_PRESETS: RolePreset[] = [
       ...moduleActions("topic_content", ["view", "generate", "edit", "review", "publish"]),
       ...moduleActions("teacher", ["view", "approve", "assign", "view_content"]),
       ...moduleActions("ai_settings", ["view", "manage"]),
+      /**
+       * View, refund, export — but deliberately **not** `adjust`.
+       *
+       * A refund moves money back to the card it came from and leaves a matching
+       * record at Razorpay, so it is reconcilable from outside this system. An
+       * adjustment invents a balance with nothing behind it, which is the one
+       * action here that cannot be checked against anything, so it stays with
+       * Super Admin until somebody asks for a finance role.
+       */
+      ...moduleActions("payment", ["view", "refund", "export"]),
     ],
     system: true,
   },
@@ -386,6 +412,7 @@ export const ROLE_PRESETS: RolePreset[] = [
       "ai_course_content.view",
       "topic_content.view",
       "teacher.view",
+      "payment.view",
       "analytics.view",
       "system.view",
     ],

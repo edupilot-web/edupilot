@@ -259,6 +259,22 @@ export const ADMIN_NAV: AdminNavSection[] = [
     ],
   },
   {
+    key: "payments",
+    heading: "Payments",
+    icon: "wallet",
+    items: [
+      {
+        label: "Ledger",
+        href: "/admin/payments",
+        permissions: ["payment.view"],
+        blurb: "Every movement across every student wallet, and the totals to reconcile against.",
+        built: true,
+        matchPrefix: true,
+        keywords: ["wallet", "payment", "razorpay", "refund", "topup", "money", "ledger", "transaction"],
+      },
+    ],
+  },
+  {
     key: "analytics",
     heading: "Analytics",
     icon: "chart",

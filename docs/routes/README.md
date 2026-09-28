@@ -35,10 +35,11 @@ means a new file here plus a row in the tables below.
 | `/notifications` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
 | `/profile` | session | not written — see [TECHNICAL.md §6.10](../TECHNICAL.md) | yes — read-only, links to the academic flow in edit mode |
 | `/settings` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — notification preferences |
+| `/wallet` | session | not written — see [TECHNICAL.md §6.14](../TECHNICAL.md) | yes — balance, top-up, statement |
 | `/teacher/login`, `/teacher/signup` | public | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
 | `/teacher/**` | teacher session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — dashboard, assignments, submissions, notes, students, profile |
 | `/admin/**` | admin session | not written — see [TECHNICAL.md §6.7, §6.9, §6.12, §6.13](../TECHNICAL.md) | yes |
-| 9 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
+| 8 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
 
 ## API
 
@@ -79,6 +80,11 @@ means a new file here plus a row in the tables below.
 | GET | `/api/notifications`, `/unread-count` | the recipient | [api/notifications.md](api/notifications.md) |
 | PATCH, POST | `/api/notifications/:id/read`, `/read-all` | the recipient | [api/notifications.md](api/notifications.md) |
 | GET, PUT | `/api/notification-preferences` | the owner | [api/notifications.md](api/notifications.md) |
+| POST | `/api/wallet/orders`, `/api/wallet/verify` | session | [api/payments.md](api/payments.md) |
+| GET | `/api/wallet`, `/api/wallet/transactions` | the owner | [api/payments.md](api/payments.md) |
+| POST | `/api/webhooks/razorpay` | signature only | [api/payments.md](api/payments.md) |
+| GET | `/api/admin/payments` | `payment.view` | [api/payments.md](api/payments.md) |
+| POST | `/api/admin/payments/refund` | `payment.refund` | [api/payments.md](api/payments.md) |
 | GET | `/api/admin/teachers` | `teacher.view` | [api/teaching.md](api/teaching.md) |
 | POST | `/api/admin/teachers/:id/status` | `teacher.approve` | [api/teaching.md](api/teaching.md) |
 | GET, POST, DELETE | `/api/admin/teachers/:id/subjects` | `teacher.assign` | [api/teaching.md](api/teaching.md) |

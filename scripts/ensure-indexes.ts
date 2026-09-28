@@ -36,6 +36,8 @@ import {
 import { Note, NoteBookmark, NoteRecipient, NoteView } from "../src/models/Note";
 import { Notification, NotificationPreference } from "../src/models/Notification";
 import { StoredFile } from "../src/models/StoredFile";
+import { Wallet, WalletTransaction } from "../src/models/Wallet";
+import { PaymentOrder } from "../src/models/PaymentOrder";
 import {
   AiAnswerCache,
   AiConversation,
@@ -132,6 +134,15 @@ const MODELS = [
   Notification,
   NotificationPreference,
   StoredFile,
+  /**
+   * Payments. `WalletTransaction.idempotencyKey` is the unique index that makes
+   * "a payment credits a wallet once" a database guarantee rather than a check
+   * the webhook has to remember — a deployment missing it would double-credit
+   * on every retried delivery, silently, with real money.
+   */
+  Wallet,
+  WalletTransaction,
+  PaymentOrder,
 ];
 
 async function main() {
