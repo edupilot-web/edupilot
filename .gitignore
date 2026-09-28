@@ -40,3 +40,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 !.env.example
+
+# Uploaded attachments, when STORAGE_DRIVER=local. Student submissions and
+# teaching material — never committed.
+.uploads/

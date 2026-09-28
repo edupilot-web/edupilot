@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { connectDB } from "@/lib/db";
 import { StudentProfile } from "@/models/StudentProfile";
+import { StudentSemesterSubjects } from "@/models/StudentSemester";
 import { User } from "@/models/User";
 import { CollegeRequest, normalizeCollegeRequestName } from "@/models/CollegeRequest";
 import { College } from "@/models/College";
@@ -83,18 +84,155 @@ export function nextStepFor(
 }
 
 /**
+ * What each field invalidates when it changes.
+ *
+ * The academic selection is a chain — a subject belongs to a regulation, which
+ * belongs to a programme at a college — so moving a link breaks everything below
+ * it. Changing the college and keeping the old branch would leave a profile that
+ * resolves to nothing, and `resolveStudentContext` would reject the whole save
+ * with an error about a branch the caller never mentioned.
+ *
+ * Clearing the downstream fields instead means a partial update degrades to
+ * "you are at a new college, tell us your course" rather than failing.
+ *
+ * `admissionYear` is deliberately absent: it changes the *derived* year and
+ * semester, but those are recomputed from it on every resolve anyway, and an
+ * explicit semester override is a deliberate correction that a batch edit should
+ * not silently discard.
+ */
+const DEPENDENTS: Partial<Record<keyof AcademicSelection, (keyof AcademicSelection)[]>> = {
+  stateId: ["collegeId", "universityId", "programId", "branchId", "regulationId", "subjectIds"],
+  collegeId: ["universityId", "programId", "branchId", "regulationId", "subjectIds"],
+  programId: ["branchId", "regulationId", "subjectIds"],
+  branchId: ["regulationId", "subjectIds"],
+  regulationId: ["subjectIds"],
+  currentSemester: ["subjectIds"],
+};
+
+const SELECTION_KEYS = [
+  "stateId",
+  "collegeId",
+  "universityId",
+  "programId",
+  "branchId",
+  "regulationId",
+  "admissionYear",
+  "admissionType",
+  "currentYear",
+  "currentSemester",
+  "graduationYear",
+  "subjectIds",
+] as const satisfies readonly (keyof AcademicSelection)[];
+
+/**
+ * The stored profile, read back as a selection.
+ *
+ * Exported because the profile screen resolves the same way the flow does:
+ * read what is stored, hand it to the resolver, render what comes back. Reading
+ * the denormalised `collegeName`/`branchName` fields instead would show a
+ * student a name that no longer matches the id underneath it.
+ */
+export async function storedSelection(userId: string): Promise<AcademicSelection> {
+  const profile = await StudentProfile.findOne({ userId })
+    .select(
+      "stateId collegeId universityId programId branchId regulationId admissionYear admissionType currentYear currentSemester graduationYear subjectIds"
+    )
+    .lean();
+
+  if (!profile) return {};
+
+  const id = (value: unknown): string | null => (value ? String(value) : null);
+
+  return {
+    stateId: id(profile.stateId),
+    collegeId: id(profile.collegeId),
+    universityId: id(profile.universityId),
+    programId: id(profile.programId),
+    branchId: id(profile.branchId),
+    regulationId: id(profile.regulationId),
+    admissionYear: profile.admissionYear ?? null,
+    admissionType: profile.admissionType ?? null,
+    currentYear: profile.currentYear ?? null,
+    currentSemester: profile.currentSemester ?? null,
+    graduationYear: profile.graduationYear ?? null,
+    subjectIds: (profile.subjectIds ?? []).map((value) => String(value)),
+  };
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) || Array.isArray(b)) {
+    const left = Array.isArray(a) ? a.map(String) : [];
+    const right = Array.isArray(b) ? b.map(String) : [];
+    return left.length === right.length && left.every((entry, index) => entry === right[index]);
+  }
+  return (a ?? null) === (b ?? null);
+}
+
+/**
+ * Lay an incoming selection over the stored one.
+ *
+ * A key the caller did not send keeps its stored value; a key sent as `null`
+ * clears it. That is the difference between a partial update and a replace, and
+ * without it a `PATCH {"currentSemester": 5}` emptied the student's entire
+ * academic profile — every unsent field resolved to nothing and was written as
+ * such, dropping them back into onboarding with their college gone.
+ *
+ * Exported for the tests, which is the only place the merge can be checked in
+ * isolation from the resolver and the database.
+ */
+export function mergeSelection(
+  stored: AcademicSelection,
+  incoming: AcademicSelection
+): AcademicSelection {
+  const merged: Record<string, unknown> = { ...stored };
+  const supplied = SELECTION_KEYS.filter((key) => key in incoming);
+
+  for (const key of supplied) {
+    merged[key] = incoming[key];
+  }
+
+  // Then drop whatever sits downstream of a field that actually moved — unless
+  // the caller supplied that field too, in which case they have already said
+  // what it should be.
+  for (const key of supplied) {
+    if (sameValue(stored[key], incoming[key])) continue;
+    for (const dependent of DEPENDENTS[key] ?? []) {
+      if (supplied.includes(dependent)) continue;
+
+      // Nothing to invalidate. Worth skipping rather than writing `null` over
+      // an absent key: the merged selection is what the resolver reports
+      // failures against, and a field nobody ever set should stay absent.
+      const current = merged[dependent];
+      if (current === null || current === undefined) continue;
+      if (Array.isArray(current) && current.length === 0) continue;
+
+      merged[dependent] = dependent === "subjectIds" ? [] : null;
+    }
+  }
+
+  return merged as AcademicSelection;
+}
+
+/**
  * Save whatever the student has chosen so far.
  *
  * `partial: true` is the autosave path — it validates and stores but does not
  * require the profile to be finishable. `partial: false` is the final submit and
  * refuses to mark anything complete that the server cannot verify.
+ *
+ * Either way the write is a **merge** over what is already stored, not a
+ * replace. The patch below sets every field from the resolved context, so
+ * anything missing from `incoming` has to be filled in from the profile first or
+ * it is written away — see `mergeSelection`.
  */
 export async function saveAcademicSelection(
   userId: string,
-  selection: AcademicSelection,
+  incoming: AcademicSelection,
   options: { partial: boolean }
 ): Promise<SaveResult> {
   await connectDB();
+
+  const selection = mergeSelection(await storedSelection(userId), incoming);
 
   // §30: every relationship is verified before anything is written.
   const resolution = await resolveStudentContext(selection);
@@ -194,13 +332,66 @@ export async function saveAcademicSelection(
     return { ok: true, context, completed: false, nextStep: nextStepFor(context, personalComplete) };
   }
 
-  await StudentProfile.findOneAndUpdate(
+  const profile = await StudentProfile.findOneAndUpdate(
     { userId },
     { $set: patch, $setOnInsert: { userId: new Types.ObjectId(userId) } },
     { upsert: true, returnDocument: "after", runValidators: true, setDefaultsOnInsert: true }
   );
 
+  await recordSemester(userId, profile?._id, context, { confirmed: !options.partial });
+
   return { ok: true, context, completed: complete, nextStep: nextStepFor(context, personalComplete) };
+}
+
+/**
+ * Record what this student is taking, this semester.
+ *
+ * `StudentProfile.subjectIds` is one flat array with no semester on it, so
+ * recording the fourth semester overwrites the third — and with it the only
+ * record of what the student actually took. `StudentSemesterSubjects` is the
+ * per-semester row that exists to keep that history, and until now **nothing in
+ * the application wrote it**: a seed script was its only author, so
+ * `subjectsConfirmed` was false for every real student and `/curriculum` told
+ * someone who had just chosen their semester and subjects that it had guessed
+ * them.
+
+ * The profile field stays as the current-semester cache, so every existing read
+ * keeps working and this is an addition rather than a migration.
+ *
+ * `confirmedAt` is set only on a **submit**, never on an autosave. An autosave
+ * is the flow passing through a step, not the student agreeing to what is on
+ * it, and treating the two the same would mark a list confirmed that nobody has
+ * looked at. Once set it is not cleared by a later autosave, because a
+ * confirmation is a thing that happened.
+ */
+async function recordSemester(
+  userId: string,
+  profileId: Types.ObjectId | undefined,
+  context: ResolvedStudentContext,
+  options: { confirmed: boolean }
+): Promise<void> {
+  // A semester is what the row is keyed by, and subjects are what it is for.
+  if (!profileId || context.currentSemester === null || !context.subjects.length) return;
+
+  const now = new Date();
+
+  await StudentSemesterSubjects.findOneAndUpdate(
+    { studentProfileId: profileId, semester: context.currentSemester },
+    {
+      $set: {
+        userId: new Types.ObjectId(userId),
+        year: context.currentYear ?? Math.ceil(context.currentSemester / 2),
+        regulationId: context.regulation ? new Types.ObjectId(context.regulation.id) : null,
+        subjectIds: context.subjects.map((subject) => new Types.ObjectId(subject.id)),
+        source: "student-selected",
+      },
+      // `$setOnInsert` would lose a confirmation that arrives on a later
+      // submit, so the flag is set on its own and never unset.
+      ...(options.confirmed ? { $max: { confirmedAt: now } } : {}),
+      $setOnInsert: { studentProfileId: profileId, semester: context.currentSemester },
+    },
+    { upsert: true, runValidators: true, setDefaultsOnInsert: true }
+  );
 }
 
 /**

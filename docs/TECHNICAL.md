@@ -4,8 +4,10 @@ Living record of what this project is, how it is built, and what is deliberately
 **Keep this file updated in the same change that alters behaviour** — new route, new model field,
 new invariant, new dependency.
 
-- Status: student auth + onboarding complete; admin application complete for institution, student and administration management
-- Last updated: 2026-08-24
+- Status: student auth + onboarding complete; admin application complete for institution, student and
+  administration management; curriculum → topics → prepared content → AI tutor complete end to end;
+  teachers, assignments, notes and notifications complete end to end
+- Last updated: 2026-09-28
 - Owner: @RajeshKolluri
 - **Per-route documentation lives in [routes/](routes/)** — one file per URL, covering the page or
   handler, its server and client halves, every status it returns, and what about it is not real.
@@ -456,6 +458,58 @@ nothing. That failure mode cost real debugging time; the reset is cheaper than r
    `$pull`ed from every enrollment's `completedLessons`.
 12. **`progress` = round(completed ÷ total lessons × 100)**, recomputed on every progress write;
    `completedAt` is set exactly when progress hits 100 and cleared otherwise.
+13. **A topic belongs to exactly one curriculum row** — `topics` is unique on `(subjectId, sequence)`
+   and on `(subjectId, slug)`. Because `CurriculumSubject` already *is* one subject of one branch
+   under one regulation at one college, two colleges teaching the same subject get separate topic
+   lists with no query anywhere having to re-check ownership.
+14. **Topics are materialised from the syllabus, never invented.** `npm run seed:topics` reads
+   `CurriculumSubject.units[].topics` and upserts on the natural key, so a re-run keeps existing
+   ids — which is what preserves progress and AI history across a syllabus edit.
+15. **A topic that leaves the syllabus is archived, not deleted.** Progress rows and interactions
+   point at it, and a delete would orphan them (§58).
+16. **One content document per (topic, language)**, and students see `status: "published"` only.
+   Nothing in the generator can write another status, and `PATCH` refuses `"published"` outright —
+   the publish endpoint is the single path to live content and needs its own permission.
+17. **`Topic.hasPublishedContent` is written by the publish transition alone.** It drives
+   "Explanation ready" on the subject page; setting it at generation time would advertise text
+   nobody had read.
+18. **Progress is derived from flags, never asserted by a client.** `percentageFor()` sums five
+   weighted signals to exactly 100, and one function writes both the flags and the percentage, so
+   they cannot drift. Completion is sticky: a re-weighting must not take a finished topic back.
+19a. **A teacher is confined to one college, and that college is never a parameter.**
+   `TeacherProfile.collegeId` is the authority; no request body in the teaching
+   module carries a college, a programme, a branch or a regulation, so there is
+   nothing to validate a caller's claim against (§10).
+19b. **Being a teacher grants nothing.** Every write is gated on an *active*
+   `TeacherAcademicAssignment` for the subject. A teacher assigned Data
+   Structures cannot act on DBMS in the same branch and semester (§11, §94).
+19c. **A revoked subject assignment is never deleted.** Work published under it
+   stays published — students are working against it — and the record of who was
+   authorised at the time is what makes that defensible (§78).
+19d. **A teacher never selects students.** The audience is derived from the
+   subject by `resolveAudience()`, and "which year they are in" comes from the
+   admission year rather than the stored `currentYear`, so a student who moves up
+   stops matching without anybody updating a row (§19, §102).
+19e. **Recipients are materialised at publish time and never re-resolved.**
+   `AssignmentStudent` and `NoteRecipient` are the authorisation *and* the
+   history: a student with no row cannot reach the item, and one who changes
+   branch keeps what they were given (§78, §101).
+19f. **A per-student assignment status never moves backwards.** Re-opening a
+   graded assignment cannot drop it to `viewed` and take a submission off a
+   teacher's count.
+19g. **Submissions are append-only.** A resubmission supersedes the previous
+   attempt rather than overwriting it, so a disputed grade can still be answered.
+19h. **One notification per recipient, type and entity.** A unique index, so a
+   retried fan-out writes nothing the second time — and it is an insert, never an
+   upsert, so a retry cannot mark a read notification unread (§63).
+19i. **Uploaded bytes never live in MongoDB, and are never publicly served.**
+   `StoredFile` holds metadata and a storage key; every read goes through
+   `/api/files/:id`, which re-checks the session against the item the file is
+   attached to (§22, §67).
+19. **AI history is scoped by the query, not by a check.** Every read in `tutor/history.ts` filters
+   on `userId`, and the context builder verifies a supplied `conversationId` against both the user
+   and the topic — an id belonging to someone else returns nothing rather than being fetched and
+   then rejected.
 
 ## 5. API surface
 
@@ -483,6 +537,41 @@ Per-endpoint reference lives in [routes/api/](routes/api/); a quick table is in
 | `/api/enrollments` | GET | authenticated (own rows only) | query scoped to `student: session.sub` |
 | `/api/enrollments` | POST | authenticated | course must exist and be `published` |
 | `/api/enrollments/:id/progress` | PATCH | the enrolled student only | `enrollment.student === session.sub` |
+| `/api/curriculum/topics/:id` | GET | authenticated, own curriculum only | the profile's coordinate is part of the `findOne`; a foreign id 404s exactly like a missing one |
+| `/api/curriculum/subjects/:id/topics` | GET | authenticated, own curriculum only | same construction, via `authorizeSubject` |
+| `/api/curriculum/search` | GET | authenticated | the subject list searched is resolved from the profile; no parameter widens it |
+| `/api/ai/question` | POST | authenticated | `buildTutorContext` re-resolves the chain from the database; body carries ids only, never a provider or model |
+| `/api/ai/topic/deep-dive` | POST | authenticated | as above |
+| `/api/ai/question/:id` | GET, PATCH | the student who asked | query filtered on `userId` |
+| `/api/ai/question/:id/retry` | POST | the student who asked | the question and topic come from the stored row, never the body |
+| `/api/ai/conversations`, `/:id` | GET, DELETE | the student who owns the thread | query filtered on `userId`; DELETE archives, never deletes |
+| `/api/ai/history/topic/:topicId` | GET | authenticated (own rows only) | filtered on `userId`, so a foreign topic id returns an empty list |
+| `/api/learning/progress` | GET, PUT | authenticated, own topics only | `authorizeTopic` on every write; the client sends signals, never a percentage |
+| `/api/learning/events` | POST | authenticated, own topics only | `authorizeTopic`, plus a closed event-type list |
+| `/api/learning/bookmarks` | GET, POST, DELETE | authenticated (own rows only) | query scoped to `session.sub`; POST upserts so a double tap is idempotent |
+| `/api/admin/topic-content/generate` | POST | `topic_content.generate` | `withGenerationLimit` — per-admin rate limit, batch capped at 10 |
+| `/api/admin/topic-content/:id` | GET, PATCH | `topic_content.view`, plus `.edit` / `.review` per field | refuses `status: "published"` outright |
+| `/api/teacher/signup` | POST | public | role set server-side; college must be an id from the directory; rate limited per address and per college |
+| `/api/teacher/login` | POST | public | same `authenticate()` as students; a non-teacher gets the credential error, never "wrong door" |
+| `/api/teacher/profile` | GET, PUT | teacher | college and status are not editable fields |
+| `/api/teacher/academic-context`, `/subjects` | GET | teacher | resolved from `TeacherAcademicAssignment`; an unauthorised subject is never fetched, not filtered out |
+| `/api/teacher/assignments` | GET, POST | teacher + `requireSubject` | body carries `subjectId` only; every other academic field comes from the authorised subject |
+| `/api/teacher/assignments/:id` | GET, PUT | the owning teacher | filtered on `teacherUserId` **and** `collegeId`; `subjectId` is unrepresentable on update |
+| `/api/teacher/assignments/:id/publish` | POST | the owning teacher, re-authorised on the subject | rate limited; a revoked assignment blocks it (§78) |
+| `/api/teacher/assignments/:id/submissions` | GET | the owning teacher | roster starts from `AssignmentStudent`, so it cannot reach a student who is not on it (§45) |
+| `/api/teacher/assignments/:id/submissions/:studentId` | GET, POST | the owning teacher | another teacher at the same college gets 404 (§94) |
+| `/api/teacher/notes/**` | GET, POST, PUT | teacher + `requireSubject` | same gates as assignments |
+| `/api/student/assignments`, `/:id` | GET | the student it was published to | the student's own `AssignmentStudent` row *is* the authorisation; foreign and missing ids both 404 |
+| `/api/student/assignments/:id/submit` | POST | the student it was published to | window checked with the same function the UI renders from; rate limited |
+| `/api/student/notes`, `/:id` | GET | the student it was published to | archived returns 410, not 404 — they were sent it (§78) |
+| `/api/notifications/**` | GET, PATCH, POST | the recipient | scoped inside the query; no parameter widens it |
+| `/api/notification-preferences` | GET, PUT | the owner | unknown categories and channels are dropped; `account` cannot be muted |
+| `/api/files/upload` | POST | teacher (teaching material) or student (submission) | college taken from the uploader's profile; MIME, extension and size all checked |
+| `/api/files/:fileId` | GET | per purpose — see §6.13 | college gate first, then the item the file is attached to; 404 for "not yours", never 403 |
+| `/api/admin/teachers` | GET | `teacher.view` | scoped to the admin's own college when they have one |
+| `/api/admin/teachers/:id/status` | POST | `teacher.approve` | transition table decides; a rejection or suspension needs a reason |
+| `/api/admin/teachers/:id/subjects` | GET, POST, DELETE | `teacher.assign` | the subject must be in the **teacher's** college; DELETE revokes, never deletes |
+| `/api/admin/topic-content/:id/publish` | POST, DELETE | `topic_content.publish` | approved-only, refuses `provider: "mock"`, requires an explicit review confirmation; DELETE requires a reason |
 
 Two patterns are used deliberately:
 
@@ -516,12 +605,13 @@ is the authority; `proxy.ts` (§6.5) only does the cheap cookie check in front o
 | Top bar | [app-topbar.tsx](../src/components/app/app-topbar.tsx) | search, notification bell, account menu (where Sign out lives) |
 | Routes | [app-routes.ts](../src/lib/app-routes.ts), [nav.ts](../src/components/app/nav.ts) | one list of signed-in paths: the sidebar, the placeholder pages and the proxy all read it |
 | Cards | [dashboard-cards.tsx](../src/components/app/dashboard-cards.tsx) | the six dashboard cards |
-| Card data | [dashboard-data.ts](../src/lib/dashboard-data.ts) | **static placeholder content** — see §6.6 |
+| Card data | [dashboard-data.ts](../src/lib/dashboard-data.ts) | one loader for the whole screen, from the database — see §6.6 |
 
 `getCurrentUser()` ([current-user.ts](../src/lib/current-user.ts)) is wrapped in React's `cache`, so
 the layout and the page inside it share one query per request rather than each issuing their own.
 
-Of the fourteen sidebar destinations only `/dashboard` is built. The other thirteen render
+Seven of the sixteen sidebar destinations are built: `/dashboard`, `/curriculum`, `/assignments`,
+`/notes`, `/notifications`, `/profile` and `/settings`. The other nine render
 [ComingSoon](../src/components/app/coming-soon.tsx), which names the section, says what it will do and
 states plainly that it is not built — so no sidebar entry is a dead link and none of them pretends to
 work. Each is a real route file, ready to be replaced by the actual screen. They are listed with
@@ -778,21 +868,62 @@ themselves and redirect only when it is genuinely valid.
 only single-slash relative paths, so `?next=https://evil.example` and `?next=//evil.example` fall back
 to `/dashboard` instead of becoming an open redirect.
 
+
+#### A teacher at the student door
+
+`RoutingUser` carries an optional `role`, and both `destinationFor` and
+`appGateRedirect` send a teacher to `/teacher/dashboard` before they ever ask about student
+onboarding.
+
+The student login **accepts a teacher** — the account, the credential check and the session cookie
+are all the same, and only the role differs. Without the role check that account was sent to
+`/onboarding/academic` and asked for its admission year and branch. A teacher could complete it, and
+the result was a `StudentProfile` attached to a teacher's account.
+
+Routing rather than refusing is deliberate, and it is why the two doors are **not** symmetric. The
+teacher login turns a student away with the credential message, so it cannot be used to discover which
+addresses exist. Doing the same here would tell a teacher that their correct password was wrong.
+
+`role` is optional so every caller written before teacher accounts stays correct: absent means student,
+which is what those paths were built against.
+
 ### 6.6 What the UI does not do
 
 The screens are complete; much of what they display is not yet real. Everything below is deliberate,
 and every case says so on screen rather than faking it.
 
-**Dashboard card content is static.** [dashboard-data.ts](../src/lib/dashboard-data.ts) supplies the
-tasks, wallet balance and entries, streak, timetable, notices and placement. There are no models for
-any of them — the database has Users, Courses, Lessons and Enrollments and nothing else. The only live
-value on the dashboard is the signed-in user's name, from the session. Each card reads its own export,
-so wiring one to a real query is a one-place change. Two consequences worth knowing:
+**The dashboard is real, and the cards that could not be are gone.**
+[dashboard-data.ts](../src/lib/dashboard-data.ts) used to be a list of constants — a wallet balance,
+a timetable, a notice board, a placement, a task list — and the screen built on it was the one place
+in the product that contradicted the student's own profile: it announced a semester-5 fee deadline to a
+semester-3 student and listed subjects they were not taking. Invented data is worse than an empty card,
+because the reader cannot tell which half of the screen to believe.
 
-- The task list is **read-only**. A tick that could not be persisted would be a lie, so the checkboxes
-  are display-only until a tasks API exists.
-- The progress percentage is derived from the task list rather than stored, so the bar cannot disagree
-  with the items above it.
+The rule now is that **a card exists only if a model backs it**:
+
+| Card | Source |
+| --- | --- |
+| This semester | `getCurriculumOverview()` — the student's real position, subjects and regulation |
+| Due soon | `AssignmentStudent` rows, narrowed to a fortnight, with pending and overdue counts |
+| Your studying | `LearningEvent` and `StudentTopicProgress` |
+| Notes from your teachers | `NoteRecipient` rows |
+
+Wallet, timetable, placements, events and the rest had no model and no API. They are now a **Coming
+soon** strip that links to the same pages that say they are not built, so the dashboard promises
+nothing the next tap does not honour.
+
+Two things are worth knowing about the study card:
+
+- The **streak is derived on read**, not stored. A stored counter needs a midnight job in the right
+  timezone to break it, and is wrong for everyone in the window between the day ending and the job
+  running. Counting distinct active days backwards is one indexed query over a collection already
+  TTL'd to a year.
+- A day counts if **anything** happened in it. Weighting "topic completed" above "topic opened" would
+  make the number unexplainable to the person it is shown to.
+
+The semester card says when the position was **derived** from the admission batch rather than confirmed,
+and links to `/profile`. A derived semester is a guess, and the student is the only one who can
+correct it.
 
 **Controls with no backend say so.** Search, the notification bell and Upgrade to Pro all route
 through the shell's notice slot and state that they are not connected. The **Microsoft and Apple**
@@ -802,7 +933,7 @@ buttons do the same — only Google has a real OAuth implementation (§6.4).
 exchange, JWKS verification and account linking are all implemented, but nobody has run them against
 Google with real credentials yet. Expect first-run friction over the registered redirect URI.
 
-**Placeholder pages.** The thirteen unbuilt sidebar destinations (§6.1), plus `/forgot-password`,
+**Placeholder pages.** The nine unbuilt sidebar destinations (§6.1), plus `/forgot-password`,
 `/terms` and `/privacy`. A password reset needs a token store and an email sender; sign-up asks people
 to agree to terms nobody has written yet.
 
@@ -1010,6 +1141,52 @@ it was handed and builds schema-valid content from the real unit titles, so the 
 exercised without a key. Everything it writes says it is placeholder text, and the publish endpoint
 refuses `provider: "mock"` outright.
 
+##### Vertex AI is the primary provider; Gemini by API key is the fallback
+
+Two providers call the **same Gemini models over the same wire format** and differ only in URL and
+credential, so the body building, response reading and error mapping live once in
+[gemini-core.ts](../src/lib/admin/ai/providers/gemini-core.ts). The alternative was a second
+three-hundred-line provider that agreed with the first on every subtle point — `MAX_TOKENS` being a
+failure, a blocked prompt being non-retryable, a 404 meaning "wrong model name" — until somebody
+changed one of them.
+
+**Why Vertex first.** Not the output, which is identical. Access is an IAM role that can be scoped,
+audited and rotated centrally rather than a key somebody pasted into an environment; prompts are
+covered by the Google Cloud terms and are not used to train the models; quota belongs to the project
+rather than to one key; and a region can be pinned. For a platform whose prompts carry a named
+student's syllabus and their questions, the second of those is the one that decides it.
+
+**Why Gemini second, rather than OpenAI.** Two reasons, and the cost one is the weaker:
+
+- It is the same model over the same wire format, so a fallback answer obeys the same response schema
+  and reads the same to a student. Falling from Gemini onto GPT would change how every answer is
+  written at the exact moment something is already wrong.
+- It fails **independently in the way that matters**: an expired service account, a missing
+  `aiplatform.user` role or a project quota takes Vertex down without touching an API key. A
+  Google-wide outage defeats both, which is what `AI_FALLBACK_PROVIDERS=gemini,deepseek` is for.
+
+Flash is the everyday model and Pro only the advanced tier. The tutor answers thousands of ordinary
+questions and a handful of hard ones, and Flash costs roughly a tenth as much per answer; `tierForDepth()`
+already routes the genuinely hard requests upward.
+
+**Credentials, in the order tried.** `GOOGLE_VERTEX_ACCESS_TOKEN` (a `gcloud` token — a laptop, never a
+deployment), then a service account key as JSON or base64 in `GOOGLE_VERTEX_SERVICE_ACCOUNT_JSON`, then
+the **metadata server** when running on Google Cloud with a service account attached. The third is best
+where it is available, because no key exists to leak, rotate or commit.
+
+[vertex-auth.ts](../src/lib/admin/ai/providers/vertex-auth.ts) mints the OAuth token itself — an RS256
+JWT and a form post, about sixty lines — rather than pulling in `google-auth-library`, whose
+transport, retry policy and filesystem credential search would all have to be reconciled with the job
+runner's. Tokens are cached per credential until two minutes before expiry: one lasts an hour and
+minting one costs a round trip plus an RSA signature, so doing it per request would add both to every
+answer. `canAuthenticate()` deliberately makes **no** network call, because it runs while building the
+fallback chain on every request.
+
+Base64 is accepted for the service account because a key is multi-line PEM inside JSON and most
+deployment platforms mangle newlines in environment variables. A key that cannot be used to sign is
+reported as `not-configured` naming the newline problem, not as `unauthorized` — the latter sends an
+operator to check a credential that is correct and merely unreadable.
+
 #### Permissions
 
 Six on `ai_course_content` (view, generate, edit, review, publish, delete) and two on `ai_settings`
@@ -1023,7 +1200,9 @@ generate, edit and review but **not** publish.
 | --- | --- |
 | `npm run seed:curriculum` | Regulations and subjects for six engineering colleges — idempotent |
 | `npm run sync:role-permissions` | Grants existing roles the AI permissions their presets gained — **required after adding any permission module** |
-| `GEMINI_API_KEY` | Read from the environment. Never stored in the database, never returned by the API |
+| `GOOGLE_VERTEX_PROJECT_ID` | The primary provider. With a credential below, this is all Vertex needs |
+| `GOOGLE_VERTEX_SERVICE_ACCOUNT_JSON` | Raw JSON or base64. Omit entirely when running on Google Cloud |
+| `GEMINI_API_KEY` | The fallback, and the admin generator. Read from the environment, never stored in the database, never returned by the API |
 
 The seeder is non-destructive: it upserts on natural keys and never touches colleges, departments,
 programmes or academic years. It seeds R23 and R20 for CSE, IT and ECE so the coordinate demonstrably
@@ -1033,6 +1212,13 @@ neither.
 Setting the key alone does nothing. A provider must also be **enabled** in AI Settings, because enabling
 one has a cost, and doing it automatically because a key happened to be present would start spending
 money without anyone choosing to.
+
+`ensureProviderConfigs()` **backfills** a row per implemented provider rather than seeding only an empty
+collection. The seed-once version left every existing deployment unable to see a provider added after
+its first run: `vertex` shipped, the code supported it, and the settings screen — which renders from
+these documents — had no row to show, so the only way to enable it was a manual database edit. The
+backfill only ever *inserts*; an existing row keeps its `enabled`, `isDefault` and tuning, so it can
+never switch a provider on or change which one is default.
 
 #### Adding a permission module to an already-seeded database
 
@@ -1165,6 +1351,126 @@ if the client's cached labels ever disagree.
 The client debounces at 900ms and stores `onboardingStep` on the profile, which is what a resumed
 session reads.
 
+#### A partial write is a merge, not a replace
+
+The write is built from the *resolved context*: `saveAcademicSelection` sets every field of the
+coordinate from what it resolved, which is what keeps the denormalised names in step with the ids. That
+makes an absent field indistinguishable from a cleared one unless something upstream keeps them apart,
+and for a while nothing did — `readSelection` mapped a missing key to `null`, so a single
+`PATCH {"currentSemester": 5}` resolved to a profile with no college, no branch, no regulation and no
+batch, wrote all of it, and dropped the student back into onboarding with their institution gone.
+
+Two changes close that:
+
+- **[route.ts](../src/app/api/profile/academic/route.ts) only reads keys the body actually contains.**
+  An absent key stays absent; an explicit `null` still clears. The distinction has to exist in the
+  parse, because after that the two are the same value.
+- **[save.ts](../src/lib/onboarding/save.ts) merges over what is stored.** `storedSelection()` reads
+  the profile back as an `AcademicSelection` and `mergeSelection()` lays the request over it, so an
+  unmentioned field keeps its value.
+
+The merge **cascades**, because the coordinate is a chain and moving a link invalidates everything
+below it:
+
+| Changed | Cleared, unless the same request supplies it |
+| --- | --- |
+| `stateId` | college, university, programme, branch, regulation, subjects |
+| `collegeId` | university, programme, branch, regulation, subjects |
+| `programId` | branch, regulation, subjects |
+| `branchId` | regulation, subjects |
+| `regulationId` | subjects |
+| `currentSemester` | subjects |
+
+Without it a partial update produces a coordinate that cannot resolve — a new college with the old
+branch still attached — and `resolveStudentContext` rejects the whole save citing a field the caller
+never sent. `admissionYear` deliberately clears nothing: the year and semester are re-derived from it on
+every resolve, and an explicit semester override is a correction a batch edit should not silently throw
+away.
+
+The browser flow always sends the whole selection, so it never triggered any of this. That is precisely
+why it was worth fixing rather than left to every future caller being equally generous.
+`mergeSelection` is exported and covered directly in
+[tests/unit/academic-merge.test.ts](../tests/unit/academic-merge.test.ts).
+
+#### Per-semester subjects are recorded, not just cached
+
+`saveAcademicSelection` writes a `StudentSemesterSubjects` row alongside the profile.
+
+`StudentProfile.subjectIds` is one flat array with no semester on it, so recording the fourth semester
+overwrites the third — and with it the only record of what the student actually took.
+[StudentSemester.ts](../src/models/StudentSemester.ts) exists to keep that history, and until now
+**nothing in the application wrote it**: a seed script was its only author. The consequence was visible
+rather than theoretical — `subjectsConfirmed` is read from `confirmedAt`, so it was false for every
+real student, and `/curriculum` told someone who had just chosen their semester and subjects that it
+had guessed them.
+
+`confirmedAt` is set on a **submit** only, never on an autosave: an autosave is the flow passing
+through a step, not the student agreeing to what is on it. Once set it is never cleared, because a
+confirmation is a thing that happened.
+
+The profile field stays as the current-semester cache, so every existing read keeps working and this is
+an addition rather than a migration.
+
+#### Three screens, one answer
+
+`/profile`, `/curriculum` and the dashboard all describe the same student, and each had been reading a
+different source:
+
+| Question | Read from |
+| --- | --- |
+| Which year and semester? | `getCurriculumOverview().position` — derived from the admission batch unless the student said otherwise |
+| Which subjects? | `getCurriculumOverview()`, which prefers the student's own list and falls back to the regulation's |
+| Was that a guess? | `position.source === "derived-from-admission"` |
+| Did they pick their own subjects? | `subjectsConfirmed` |
+
+The last two are **different questions**, and conflating them is how the profile came to say "worked
+out from your admission batch" to a student who had typed their own semester. Reading the stored
+`currentYear` directly is how it came to say "Year: Not set" beside a dashboard announcing "Semester 5
+of 8" — both describing the same person.
+
+`/profile` still resolves the stored coordinate separately, because that is the one question it alone
+answers: *is what is stored still valid*. When it is not — an archived regulation, subjects left
+without a semester — the page says which part no longer holds instead of rendering a blank.
+
+#### Correcting a finished profile
+
+`/profile` ([profile-screen.tsx](../src/components/app/profile-screen.tsx)) shows the account and the
+resolved academic coordinate, and links to `/onboarding/academic?edit=1`.
+
+It renders **through the resolver**, not from the profile document's denormalised `collegeName` and
+`branchName`. Those exist for the legacy dashboard and go stale as soon as a college is renamed, and the
+one reader who must never be shown a cached label over a different id is the student checking whether
+their details are right. When the stored coordinate no longer resolves — an archived regulation, a
+merged branch — the page says which part no longer holds instead of erroring or rendering blank: the
+profile still exists and the student can still act on it.
+
+**Editing reuses the onboarding flow.** A separate edit screen would be a second implementation of the
+cascade — pick a college and the branch, regulation, semester and subject lists all reload against it
+— and the copy students used less often would be the one that drifted. `?edit=1` changes three things
+and nothing else:
+
+- it is what gets a completed profile past the `profileCompleted` guard, which was otherwise absolute.
+  A student whose derived semester or branch was wrong had nowhere to go: `/curriculum` told them to
+  check their profile and no screen could change it.
+- the flow opens on the **review** step, the only one showing everything with a way into each of them,
+  and "done" returns to `/profile` rather than `/onboarding/complete`.
+- **autosave is off.** Autosave exists so an abandoned onboarding can resume; applied to an edit it
+  would mean a half-changed profile is already live — pick a new college, close the tab, and the
+  branch, regulation and subjects are gone with nothing chosen to replace them. An edit is atomic:
+  nothing is written until Save, and leaving keeps the profile the student had.
+
+The flag only decides where a student may land. It grants nothing — every save still goes through the
+same resolution and the same completeness bar.
+
+One related defect went with it: the flow auto-selects a college's only course, and that fired on mount
+over a course the student already had, clearing the branch, regulation, semester and subjects beneath
+it. Harmless while the flow was only ever entered step by step; not harmless once it can open on the
+review screen. It now only fills an empty choice.
+
+Subjects are **not** part of `isAcademicallyComplete`, so moving semester clears the old semester's
+subjects without making the profile incomplete. That is deliberate: the student stays in the app and is
+invited to pick the new ones rather than being forced back through onboarding.
+
 #### Batch, lateral entry and graduation
 
 `admissionYear` is stored separately from the current year, because a 2023-batch third-year and a
@@ -1200,10 +1506,529 @@ never changes between requests.
 
 #### Not built
 
-Personal information (§8) still lives in the existing signup and Google flow; the flow starts at state.
+Personal information (§8) still lives in the existing signup and Google flow; the flow starts at state,
+and `/profile` shows the name, email, phone and city read-only — there is no screen that edits them.
 Backlog and completed-subject tracking (§45) is designed for — `subjectIds` is the current semester only
 — but not implemented. The admin screens for managing regulations and subjects are the AI module's
 (§6.9); there is no student-facing CSV import (§39).
+
+### 6.12 Topics, prepared content and the AI tutor — `src/lib/learning/`, `src/lib/tutor/`
+
+The student-facing half of the AI module: the syllabus becomes clickable topics, each topic has a
+written explanation that costs nothing to read, and a tutor answers questions about it grounded on
+that student's own curriculum.
+
+**The architectural rule the whole module is built around.** Never
+`student → LLM → "tell me the syllabus"`. Instead: an administrator defines the curriculum, the
+student's profile resolves to it, the topic page renders from the database, and the model is only
+reached when the student explicitly asks for more. Everything below follows from that.
+
+#### Topics are materialised from the syllabus, not invented
+
+`CurriculumSubject.units[].topics` was already an array of titles — the right shape to *display* a
+syllabus and the wrong shape for everything else. A title cannot be progressed against, bookmarked,
+asked a question about, or given content; all of those need a stable id that survives the title
+being reworded.
+
+[Topic.ts](../src/models/Topic.ts) adds `Topic`, `Subtopic` and `TopicContent` as an extension. The
+strings stay exactly where they are and stay authoritative; `npm run seed:topics` reads them and
+writes one addressable row per title, carrying `unitNumber` back to the unit it came from. On the
+seeded data that is **9,010 topics across 537 subjects**, and re-running converges: topics upsert on
+`(subjectId, slug)` so ids survive, and titles that have left the syllabus are **archived, never
+deleted** — a student's progress and questions point at those rows.
+
+Topics hang off `CurriculumSubject`, which is already one subject of one branch under one regulation
+at one college. Two colleges that teach Data Structures differently get different topic lists for
+free, R20 keeps its own when R23 arrives, and no query has to re-check which college a topic belongs
+to. Reuse happens at the *content* level instead, where it is safe: `canonicalKey` is derived from
+the title alone, so one authored explanation reaches "Recursion and its cost" wherever it appears
+without the two curriculum rows ever being merged.
+
+#### The economics: what costs a model call and what does not
+
+| Action | Provider call |
+| --- | --- |
+| Open a topic, read the explanation, the example, the key points | **no** |
+| Reveal a self-check answer | **no** |
+| View a previous answer | **no** |
+| Re-open a topic you asked about last week | **no** |
+| Ask a question whose answer is cached | **no** |
+| Ask a new question / press a quick action | yes |
+| "Go deeper" | yes |
+| "Ask again" / "Regenerate" | yes, deliberately |
+
+The first five rows are the product. `TopicContent` holds the basic explanation, the practical
+section, the terminology, the key points, the common mistakes and the self-check *with its answers*
+— a check that called a model to mark itself is a check most students would never finish waiting
+for. The topic page renders complete before the tutor panel has done anything.
+
+`TopicContent` is separate from `Topic` because the two have different lifecycles: the structure can
+be published while the prose is still in review, and a typo fix must not send a topic back through
+approval. It is keyed on `(topicId, language)`, so §82's Telugu content is an extra row rather than
+a schema change.
+
+#### Students see `published` and nothing else
+
+The lifecycle is `ai-draft → editor-review → approved → published → archived`, its own list rather
+than the admin module's `AI_CONTENT_STATUSES` — that one models a *job* and carries `generating` and
+`failed`, which are states of a job and not of a piece of prose.
+
+There is no code path from generation to `published`. `writeDraft` in
+[topic-content-generator.ts](../src/lib/admin/ai/topic-content-generator.ts) sets `ai-draft` as a
+literal with no parameter for it; `PATCH /api/admin/topic-content/:id` refuses `status: "published"`
+outright; and the publish endpoint requires `topic_content.publish`, refuses anything not
+`approved`, refuses `provider: "mock"`, and requires an explicit `academicallyReviewed: true` —
+a publish button that needs no assertion is one people press without reading.
+
+`Topic.hasPublishedContent` — the flag behind "Explanation ready" on the subject page — is set in
+exactly one place, the publish transition. Setting it at generation time would advertise text nobody
+had read.
+
+#### The tutor pipeline
+
+`ask()` in [service.ts](../src/lib/tutor/service.ts) runs §67 in order:
+
+```
+authorise the topic → build context → normalise the question → check the cache
+→ check the quota → check the budget → choose a tier → route → validate → store → account
+```
+
+The order is load-bearing. Authorisation precedes context, so an unauthorised topic never causes a
+read of another college's syllabus. **The cache precedes the quota**, so a student at their daily
+limit still gets every answer the platform already has — those call no provider, and the daily count
+already excludes them. The consequence is deliberate: over quota, a popular question is answered
+instantly and an original one is refused. The limit caps spending, it does not ration reading.
+
+#### Nothing the browser says about curriculum is trusted
+
+`POST /api/ai/question` carries ids and text. It cannot name a provider, a model, a temperature or a
+token budget. [context.ts](../src/lib/tutor/context.ts) re-resolves the whole academic chain from the
+database and makes the student's coordinate part of the `findOne`, so a topic from another college is
+**not found** — the same answer as one that does not exist, verified against the running server along
+with the 307 for no session.
+
+The conversation id is verified against both the user *and* the topic. Without both checks a valid
+id belonging to someone else would pull their questions into this student's prompt — §71's exact
+prohibition, arriving through the back door.
+
+The prompt lives on the server ([prompt.ts](../src/lib/tutor/prompt.ts)) for the same reason the
+admin module's does: a prompt the browser can see is one it can rewrite, and its twenty-one rules
+are what stand between "explain this topic from my syllabus" and "say whatever the caller asked".
+`PROMPT_VERSION` is stamped on every interaction **and is part of the cache key**, so editing the
+wording invalidates the cache instead of serving answers produced under rules that no longer apply.
+
+#### Context is deliberately small
+
+Not the student's history — the last four turns of *this* thread, and answers appear as their stored
+`summary` rather than in full. Not the subject's syllabus — the one unit the topic sits in. Past
+eight turns a thread is compressed into `conversation.summary`, generated on the cheap tier *after*
+the answer is returned so the cost never lands inside a request a student is waiting on.
+
+The prepared explanation travels as a trimmed grounding paragraph, cut at a sentence boundary. Its
+job is to stop the tutor contradicting what the student just read; sending it whole would roughly
+double the input tokens of every request to restate material already on screen.
+
+#### The cache is the largest cost control, and has the sharpest edge
+
+The key is `sha256(topicId + normalised question + depth + language + promptVersion)`. Cross-student
+on purpose and safe to be: a topic explanation is the same explanation whoever asked for it, and the
+value holds nothing personal.
+
+The line is drawn at **conversation history**. A first question about a topic depends only on the
+topic; a question with turns behind it depends on what *this* student asked before, so the pipeline
+skips the cache entirely for those. That is the one place §47's "never cache personalised student
+data globally" is enforced, and `cache.ts` says so because it cannot enforce it alone.
+
+Normalisation lowercases, strips punctuation and removes a deliberately short filler list. It does
+**not** stem, reorder or synonymise — that is how "what is a stack" and "what is a queue" become one
+entry, and a wrong answer served instantly is worse than a right one that cost a request.
+`tests/unit/tutor-cache.test.ts` holds the contract as two lists: pairs that must collide and pairs
+that must not.
+
+#### Provider routing
+
+[router.ts](../src/lib/tutor/router.ts) reuses the existing `AIProvider` seam rather than adding a
+second one. `OpenAICompatibleProvider` is one class for DeepSeek, Groq, OpenAI and any self-hosted
+`/v1/chat/completions` endpoint — they differ in a base URL, a key variable and a default model, all
+held as data in `OPENAI_COMPATIBLE_SERVICES`. Three near-identical classes would be three places to
+fix the next parsing quirk, and the third would be missed.
+
+Two tiers, from the environment: Basic/Practical/Intermediate on the everyday model,
+Advanced/Expert on the better one. The fallback chain is a comma-separated list an operator orders;
+unknown names are dropped rather than failing, so a typo degrades instead of taking the tutor down.
+A non-retryable failure moves straight to the next provider; a retryable one gets a single backoff
+within the same provider first.
+
+**The mock is always last in the chain and is never skipped.** A deployment whose only key has
+expired serves clearly-labelled placeholder text and shows the fall-through in the usage dashboard,
+rather than serving errors until somebody notices. The tutor's mock is its own class: the admin
+module's reads a course-content prompt and would return valid JSON of the wrong schema.
+
+#### Streaming
+
+`stream: true` returns newline-delimited JSON, one event per line — `delta`, then `done` carrying
+the *stored* interaction. NDJSON rather than SSE because the client is `fetch` in a React component,
+not an `EventSource`.
+
+The transport streams **raw model text**, not parsed fields; the panel shows it accumulating and
+swaps to the structured render on `done`. Incrementally parsing JSON server-side would need a
+streaming parser to be correct and would get the client nothing it cannot do itself.
+
+Failure has two shapes and they are handled differently. Before the first byte, nothing has been
+sent, so the whole request falls back to `ask()` and runs the full chain. After the first byte the
+client is already rendering, a second provider's stream cannot be spliced on, so the error is sent
+as an event and the client offers Retry. The answer is stored either way — the generator is consumed
+inside `start`, so a closed tab costs the same as a completed one instead of losing an answer the
+platform has already paid for.
+
+#### Progress is not a page visit
+
+§24 says so and it is not pedantry: a percentage that rises because a URL was opened measures
+curiosity. `TOPIC_OPENED` is recorded and moves nothing. Five weighted signals sum to exactly 100 —
+basic 35, practical 25, advanced 20, self-check 10, question asked 10 — so the percentage *is* the
+sum of what was done rather than a second calculation that can disagree with the flags it summarises.
+Reading alone reaches 60, below the 80 completion threshold.
+
+The client posts *which signal happened*, never a number. Time is accumulated in server-clamped
+increments, because an unclamped counter fed by a browser is a field anyone can write 10⁹ into and
+"average learning time" would be built on it. Every write re-authorises the topic — one extra query
+per event, and not negotiable: without it a row can be filed against a topic the student cannot see.
+
+Progress rows are keyed on `userId`, not on `studentProfileId`. §57 requires a profile change to
+preserve learning history, and hanging progress off the profile is precisely how it would be
+orphaned. The topic title is snapshotted onto the row for the same reason (§58).
+
+#### Cost tracking
+
+Every number is **micro-USD as an integer** — floating-point dollars accumulated over a hundred
+thousand rows drift, and `$inc` on a float drifts differently again. `AiUsageDaily` is a roll-up per
+day per provider per model, not an aggregation over `AiInteraction`, because the budget check runs
+before every request: a `$group` over a growing collection is fine for a month and then is not.
+Month-to-date is a scan of at most thirty-one small documents.
+
+Failed and cached interactions are both stored. A store of only the successes makes the failure rate
+unmeasurable and "why was I charged" unanswerable.
+
+At 80% of `AI_MONTHLY_BUDGET_USD` the advanced tier silently drops to the cheap one; at 100% new
+questions are refused while stored and cached answers keep working. Degrading before the ceiling is
+the point — hitting 100% mid-month would turn the tutor off for everyone.
+
+#### Screens
+
+**`/curriculum/[subjectId]`** gains a Topics section above the syllabus. Two sections rather than
+one, because they answer different questions: the syllabus is what the exam covers, quoted from the
+regulation; the topic list is the study path, with progress against each row. Making the official
+syllabus clickable would imply every line of it has a page.
+
+**`/curriculum/[subjectId]/topics/[topicId]`** is the learning page — topic rail, content, tutor on
+desktop; content, tutor, previous questions stacked on a phone, which is the base case (§78). It is
+server-rendered from the database with no model call. The syllabus is quoted in its own visually
+distinct block, and a provenance line says whether a person or a model wrote the explanation (§36) —
+the two distinctions §54 exists to protect.
+
+A topic reached through the wrong subject's URL **redirects** to the canonical one rather than 404ing:
+the topic is legitimately the student's, only the path is stale, which is what a bookmark taken
+before a curriculum edit looks like.
+
+**`/ai-tutor`** is deliberately not a chat window. There is no message box on it at all — a tutor
+with no topic in front of it has nothing to be grounded on, and a free-floating chat would be the one
+path that bypasses grounding entirely. It shows open threads, the day's remaining questions and a way
+into a subject. Stating the quota up front matters: a student who discovers they are out *after*
+composing a question has been given a worse experience than one who could see it coming.
+
+Markdown is rendered as React nodes — paragraphs, headings, lists, `**bold**` and `` `code` `` — never
+through `dangerouslySetInnerHTML`. The content is model output; rendering it as HTML would make a
+provider's response a script-injection surface.
+
+**Admin → AI & Learning → Topic Content** lists what is waiting for a reviewer first, then subjects
+with their coverage. The per-subject workbench shows exactly one forward step per row: a row offering
+Approve and Publish at once is a row where somebody publishes without reading. Generation is capped
+at ten topics per request and runs sequentially — ten concurrent calls is the fastest way to hit a
+rate limit, and the failure would arrive as nine successes and one confusing error.
+
+#### Measured, not asserted
+
+Verified against the running dev server with a real student account on Atlas:
+
+| Check | Result |
+| --- | --- |
+| Topic page, owner | 200 |
+| Topic page, no session | 307 → `/login` |
+| Topic id from another college / nonexistent / malformed | 404, all three identical |
+| Learning event with an unknown type | 400 |
+| Learning event against a foreign topic | 404 |
+| Same question, reworded | `cacheHit: true`, 0 tokens, 0 ms |
+| View a stored answer | no provider call |
+| Ask again | new row, `regeneratedFrom` set, cache bypassed |
+| 11th uncached question in a day | 429 with `retryAfterSeconds` |
+| 11th question, but cached | served, free |
+| Deep dive from Basic | answered at Practical — one rung, not a jump |
+
+Warm topic-page latency was ~1.2 s in `next dev` against a remote Atlas cluster, dominated by
+round-trip time and dev-mode compilation. §76's <500 ms target is a production figure and has not
+been measured on production hardware.
+
+#### Not built
+
+No Redis (§47) — the answer cache is a TTL'd collection, which is one round trip and needs no second
+service; the cache key is designed so a Redis layer can sit in front of it unchanged. No semantic
+similarity on cached questions (§17's later phase): normalisation is lexical, and the wrong
+similarity threshold serves confidently wrong answers. Practice mode (§44), flashcards and
+multilingual content are schema-ready — `TopicContent.language` is on the natural key — and not
+implemented. Subtopics are modelled, addressable and used by the tutor, but nothing writes them yet:
+the seeder materialises topics only, because a syllabus line is a topic and inventing a level below
+it would be the platform asserting curriculum structure nobody supplied.
+
+### 6.13 Teachers, assignments, notes and notifications — `src/lib/teaching/`, `src/lib/notifications/`
+
+A new role and four modules on top of the curriculum: teachers set work and
+share material for the subjects a college assigns them, students receive both
+automatically, and one notification service tells everybody about it.
+
+**The rule the whole module exists to enforce** (§102): a teacher never picks
+students. They pick a *subject*, and the subject — which is already one branch
+of one regulation at one college — implies the audience. No request body in the
+module carries a `programId`, a `branchId` or a `collegeId`; there is nothing to
+tamper with because there is nothing to send.
+
+#### A teacher is a `User`, not a second account system
+
+`role: "teacher"` plus a `TeacherProfile`, exactly as a student is `role:
+"student"` plus a `StudentProfile`. §99 forbids duplicating authentication and
+the reason is sharper than tidiness: two auth systems means two places to get
+password hashing, email verification, rate limiting and session expiry right,
+and the second one is always the one that is wrong. `/api/teacher/login` is a
+different endpoint with the *same* `authenticate()` and `startSession()` behind
+it.
+
+Adding `teacher` to `ROLES` exposed an existing hole: `registerSchema` accepted
+any role, so `POST /api/auth/register` would mint an `admin` — a documented gap
+(§8) that would have become "anyone can publish to a college's students".
+`SELF_SERVICE_ROLES` now holds exactly `student`, and the teacher endpoint sets
+the role server-side.
+
+**The role on the token is never enough.** `getCurrentTeacher()` re-reads the
+database on every request, so a deactivation takes effect on the next page load
+rather than whenever a thirty-day cookie happens to expire.
+
+#### Approving an account grants nothing
+
+Two gates, and they answer different questions:
+
+| Gate | Question | Where |
+| --- | --- | --- |
+| `requireTeacher(capability)` | is this a teacher, and may they act at all? | account status + email |
+| `requireSubject(teacher, id)` | may they act on **this** subject? | `TeacherAcademicAssignment` |
+
+The second is §94's second test made structural: a teacher assigned Data
+Structures cannot touch DBMS, though both are in their college, their branch and
+their semester. Being a teacher grants the ability to hold subject assignments,
+and nothing else.
+
+§4's `PENDING → APPROVED → ACTIVE` is stored as two states rather than three.
+Approved and active would be separated by no action — nothing moves an account
+between them, so every approved teacher would sit somewhere they could never
+leave. What that third state actually wants is the gate, and the gate is
+`canTeacherPublish()`: **approved and email-verified**, derived rather than
+stored so it cannot drift from the two facts it summarises.
+
+`TEACHER_AUTO_APPROVE` exists (§4) and is **off by default**. Approving every
+self-declared teacher would let anyone with an email address publish to a
+college's students — the one failure in this module with no undo.
+
+#### The audience resolver, and why §19 was already solved
+
+`resolveAudience()` answers "who is in this place in the curriculum, right now".
+The hard part is §19: "notify all students who are in that year currently"
+cannot be answered from `StudentProfile.currentYear`, which is a number a
+student typed during onboarding and is wrong from the next July onwards.
+
+The curriculum module's `resolveAcademicPosition()` already derives the position
+from the **admission year**, which stays right as terms roll over. So the
+resolver narrows in Mongo on everything that is a stored fact — college,
+programme, branch, regulation, all indexed — and settles the semester in memory
+over the candidates. That shape is forced: the derivation is per-student
+arithmetic, not a database predicate, and filtering on `currentSemester` would
+have been faster and would have targeted last year's students.
+
+It returns *why* students were excluded as well as who was included. "Your
+assignment reached 184 students" and "184, and 6 more we could not place" are
+different facts, and the second is the one that explains a student asking why
+they never got it.
+
+#### Publishing: what runs in the request, and what does not
+
+```
+authorise teacher → authorise subject → validate → resolve audience →
+snapshot the target → one row per student → [response] → notify
+```
+
+The `AssignmentStudent` rows are written **inside** the request, deliberately
+against §17's "use a background job": the student's own list reads from those
+rows, so replying "published" before they exist would be a lie with a race
+attached, and the count the teacher was shown must be the count published to.
+What is deferred is the notification fan-out, which nothing depends on for
+correctness — a student who never sees the prompt still finds the work in their
+list.
+
+`after()` from `next/server` is the queue, the same mechanism the AI module
+uses and the one that fits a deployment with no worker process. A `BackgroundJob`
+row is written alongside, because `after()` records nothing an operator can see.
+
+Publishing to **nobody succeeds**, and says so (§78). Refusing would be worse:
+the assignment is valid, the teacher meant it, and the usual cause is a cohort
+that has moved on — which they can only diagnose if the publish tells them.
+
+#### Materialised recipients are what make the history true
+
+`AssignmentStudent` and `NoteRecipient` look like overhead for a set that could
+be recomputed. They are what settle four requirements at once:
+
+- **authorisation** — a student with no row has no way in (§94);
+- **§19** — the rows record who the work was set for *at the time*;
+- **§101's "historical assignments remain accessible"** — moving up a year does
+  not take them away, which a live audience resolution would;
+- **performance** — the student's list is one indexed query, and "who has *not*
+  submitted" is answerable at all.
+
+Verified: a student whose admission year is moved forward keeps every assignment
+they were given and stops matching new work for their old semester.
+
+#### Notifications are one service, not two
+
+§35 forbids building assignment and note notifications separately, and the
+schema is where that is enforced rather than merely intended: `Notification` has
+no `assignmentId` and no `noteId`, only `entityType` + `entityId`. An
+announcement or an attendance notification (§95) is a new enum value, not a new
+table and not a new service.
+
+Three properties the callers depend on:
+
+- **Bulk.** One `bulkWrite` per 500 recipients, never a loop (§62).
+- **Idempotent.** The unique index on
+  `(recipientId, type, entityType, entityId)` means a retried fan-out writes
+  nothing the second time (§63) — a database guarantee rather than a check the
+  fan-out has to remember, which matters because the fan-out is the code most
+  likely to be retried. It is an `insertOne`, not an upsert, so a retry cannot
+  resurrect a notification the student has already read.
+- **Never fails the caller.** A missing prompt is a smaller loss than a
+  rolled-back publish.
+
+Creation and delivery are separate (§37). The row *is* the in-app notification;
+email and push are registered providers, and none is registered today —
+`IMPLEMENTED_CHANNELS` lists only `in_app`, so the preferences screen shows the
+others as unavailable rather than offering a switch that silently does nothing.
+
+The `account` category — approvals and rejections — cannot be switched off. It
+is the only way a recipient learns what happened to their account.
+
+#### Reminders
+
+Two windows before the deadline and one after, and one rule that matters more
+than either: **a student who has already submitted is never reminded** (§80).
+`remindersSent` on the student's own row makes the sweep re-runnable; without
+it the deduplication index would silently drop the second reminder, which would
+be *correct* and indistinguishable from a bug.
+
+There is no scheduler in the application, and that is an honest gap rather than
+a hidden one. A web app with no worker process cannot hold one reliably —
+`setInterval` in a serverless function either never fires or fires once per
+instance. `npm run reminders` is the entry point for a cron job.
+
+#### Files
+
+No object storage exists on the platform, so `src/lib/storage/` is an interface
+with a working local-disk driver and a slot for S3. §22 forbids bytes in
+MongoDB; a module that assumed a bucket would have been unbuildable.
+
+The local root is **not** inside `public/` — anything there is served with no
+authorisation at all, which would hand every submission to anyone who could
+guess a filename.
+
+§67 asks for signed URLs. `/api/files/:id` is stronger and the difference
+matters for a student's submission: a signed URL is a bearer token, forwardable
+and valid to whoever holds it until it expires, while a session check runs
+against the person actually asking, every time. Authorisation is per purpose —
+a teacher who owns the item or a student it reached; for a submission, the
+student who wrote it or the teacher who set the work, and *not* another teacher
+at the same college.
+
+Uploading is separate from attaching, because a teacher drags a file onto a form
+that does not exist yet. `claimAttachments()` closes that gap and does the thing
+the download gate depends on: it verifies the caller uploaded the file, so one
+teacher cannot attach another's file id and publish it to their own cohort. The
+stored metadata is returned rather than the caller's, so a request cannot
+relabel a 40MB executable as a 2KB PDF.
+
+Validation is MIME **and** extension **and** size (§86): the allowlist is the
+real control, and the extension denylist catches the case it cannot — a crafted
+request declaring `application/pdf` for `payload.exe`. `application/octet-stream`
+is refused rather than shrugged at, because it is what an unidentified file
+arrives as.
+
+#### Screens
+
+**Students** get `/assignments`, `/assignments/[id]`, `/notes`, `/notes/[id]`
+and `/notifications`, plus a bell that now counts real rows. Status is carried
+by a word and a shape, never colour alone — this is the screen where the
+difference is "you have handed this in" and "you have not". Each tab's empty
+state says what *its* emptiness means; "no assignments yet" under the Overdue
+tab would be alarming in the wrong direction.
+
+The topic page gains **Related learning material** (§52), read from the
+student's own recipient rows — so it shows what *they* received rather than
+everything any teacher ever attached to that topic. That is §51's payoff: the
+explanation, the work set on it, the material shared for it and the AI tutor on
+one screen.
+
+**Teachers** get their own shell at `/teacher/*` — plainer than the student one,
+because this is a tool somebody uses for twenty minutes to set work and mark it.
+The cascade runs in the browser over a tree the server already narrowed to what
+they may touch: five dependent requests to walk a few dozen rows would be five
+round trips on the screen a teacher opens before everything they do.
+
+A banner states the one thing that will otherwise be discovered one refused
+button at a time — pending approval, unverified email, or no subjects assigned
+(§89).
+
+**Admins** get `/admin/teachers`, defaulting to the pending queue. Approving
+makes an account usable; assigning a subject is what lets it reach students, and
+the panel for that opens over the list because it is what an administrator does
+immediately after approving.
+
+`AdminUser` gained a nullable `collegeId` for §56. It is enforced by the teacher
+routes only; null means no restriction, which is what every existing
+administrator has, so nothing that predates it changed.
+
+#### Measured, not asserted
+
+An end-to-end run against a scratch database:
+
+| Step | Result |
+| --- | --- |
+| Audience resolved for semester 3 | 3 students, 0 skipped |
+| Assignment published | 3 eligible, 3 notified |
+| Fan-out retried | 0 sent — deduplication holds |
+| Student list, submit, teacher grade | grade visible to the student |
+| Note published | 3 recipients, 3 notified |
+| Reminder sweep at the 2-hour window | 2 notified — the submitter skipped |
+| Roll-ups | assigned 3, submitted 1, graded 1 |
+
+The §94 security cases are in `tests/integration/teaching-authorization.test.ts`
+and run against a real database: cross-college teacher, unassigned subject,
+cross-college student, one student's submission from another's account, and one
+teacher's submissions from another teacher at the same college.
+
+#### Not built
+
+Scheduled assignments (`SCHEDULED` is in the state machine; nothing fires them —
+the same missing scheduler as the reminders). Email and push notifications
+(providers registered, none implemented). File *uploads from the UI* — the API
+and the storage layer work and are tested, but no form has a file input yet, and
+the forms say so rather than offering one that loses the file. Rubrics and
+AI-assisted grading (§44 defers both). The S3 driver. `NoteRecipient` rows are
+written at publish time only, so a student who joins a cohort afterwards does
+not retroactively receive earlier notes.
 
 ## 7. Environment, commands, local setup
 
@@ -1224,6 +2049,21 @@ Required env (see [.env.example](../.env.example)); the app throws a named error
 | `EMAIL_OTP_SECRET` | optional; HMAC key for the 6-digit code. Falls back to `JWT_SECRET` |
 | `EMAIL_VERIFICATION_TTL_MINUTES` | optional; code and link lifetime, default 60, capped at 1440 |
 | `MONGODB_AUTO_INDEX` | optional override; defaults on outside production, off in it |
+| `GOOGLE_VERTEX_PROJECT_ID` | optional; the primary AI provider. Needs a credential below |
+| `GOOGLE_VERTEX_SERVICE_ACCOUNT_JSON` | optional; raw JSON or base64. Unnecessary on Google Cloud |
+| `GOOGLE_VERTEX_LOCATION` | optional; `global` by default, which avoids per-region model availability |
+| `GEMINI_API_KEY` | optional; the AI fallback, and the admin generator. Never stored in the database |
+| `AI_DEFAULT_PROVIDER`, `AI_DEFAULT_MODEL` | the tutor's everyday model — Basic, Practical, Intermediate |
+| `AI_ADVANCED_PROVIDER`, `AI_ADVANCED_MODEL` | used only for Advanced and Expert, and dropped past 80% of the budget |
+| `AI_FALLBACK_PROVIDERS` | comma-separated chain, `provider` or `provider:model`; unknown names are ignored |
+| `DEEPSEEK_API_KEY`, `GROQ_API_KEY`, `OPENAI_API_KEY` | credentials for the OpenAI-compatible providers |
+| `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY` | a self-hosted or proxied endpoint; the URL has no default on purpose |
+| `FREE_DAILY_AI_QUESTIONS`, `PREMIUM_DAILY_AI_QUESTIONS` | per-student daily caps, default 10 and 50. Cached and failed requests do not count |
+| `AI_MONTHLY_BUDGET_USD` | estimated spend ceiling; 0 or unset disables the check |
+| `AI_CACHE_ENABLED` | set to `false` to disable cross-student answer caching. On by default |
+| `TEACHER_AUTO_APPROVE` | `true` approves teacher signups on the spot. **Off by default** — approving every self-declared teacher would let anyone publish to a college's students |
+| `STORAGE_DRIVER` | `local` is the only implemented driver and the default. Anything else fails loudly on the first upload rather than falling back |
+| `STORAGE_LOCAL_ROOT` | where the local driver writes, default `.uploads`. Deliberately not under `public/`, which is served with no authorisation |
 
 ```bash
 cp .env.example .env.local
@@ -1243,6 +2083,11 @@ profiles, so they land on the dashboard.
 | `npm run seed:colleges` | once per environment, and after editing the curated list |
 | `npm run seed:admin` | to rebuild the whole admin demo dataset — **destructive**, see below |
 | `npm run seed:curriculum` | regulations and subjects for the AI module (§6.9) — idempotent |
+| `npm run seed:topics` | materialises topics from the syllabus and publishes the authored content (§6.12) — idempotent, `--dry-run` and `--subject CODE` supported |
+| `npm run sync:role-permissions` | **required after adding a permission module** — grants existing roles the new module's permissions |
+| `npm run test` | unit tests: cache normalisation, progress arithmetic, the answer schema, topic identity. No database needed |
+| `npm run test:integration` | the authorization tests, each suite against its own `<db>_test_<suite>` database it creates and drops |
+| `npm run reminders` | assignment deadline reminders (§6.13). **Run on a schedule** — there is no scheduler in the app; every 15–60 minutes is right, and the sweep is idempotent |
 | `npm run create-admin` | to add one administrator, or reset its password, on any database |
 | `npm run ensure-indexes` | **production, after every schema change** — `autoIndex` is off there |
 | `npm run migrate:profiles` | once, on a database predating the `studentProfiles` collection |
@@ -1401,7 +2246,54 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
 19. No file or video upload — `videoUrl` and `coverImageUrl` are bare URL strings.
 20. Deep pagination uses `skip`/`limit`, which degrades on large offsets; `?q=` depends on the text
     index and, as written, cannot combine with relevance sorting.
-21. No structured logging, metrics, or health endpoint; `console.error` is the whole story.
+21. No structured logging or metrics; `console.error` is the whole story. AI usage is the exception —
+    `AiUsageDaily` is a real per-day, per-model cost roll-up.
+22. **Streamed answers estimate their token counts.** Most providers send usage only in a final
+    frame and some send none, so the streaming path derives input and output tokens from character
+    counts (÷4). The non-streaming path uses the provider's real numbers. Costs are already labelled
+    estimates, but a deployment reconciling against an invoice should know which figures are which.
+23. **The model price table is hand-maintained** ([usage.ts](../src/lib/tutor/usage.ts)). An
+    unlisted model falls back to a mid-range price rather than to zero — zero would make an unlisted
+    model look free, which is exactly the one that would be left running for a month.
+24. **No versioning on `TopicContent`.** `contentVersion` increments and the previous text is
+    overwritten. The admin course-content module keeps immutable version rows; this one does not
+    yet, so an editor cannot diff a regeneration against what it replaced.
+25. **The daily quota window is server-local midnight**, not the student's timezone, and there is no
+    tier resolution — every student is on the free tier because no subscription model exists yet.
+26. **`ensure-indexes` still omits the curriculum, textbook and AI course-content models** — a gap
+    that predates this module. The learning and tutor models are registered; those three are not,
+    so their indexes are only built where `autoIndex` is on.
+27a. **Nothing schedules the reminders.** `npm run reminders` is written and
+    tested; a cron job, a platform scheduler or a task has to call it. Until
+    something does, no deadline reminder is ever sent. A web app with no worker
+    process cannot hold a scheduler reliably, so this is external by design —
+    but it is a gap until a deployment closes it.
+27b. **`SCHEDULED` assignments never publish themselves**, for the same reason.
+    The state exists in the machine and nothing fires it.
+27c. **Email and push notifications are seams, not features.** Providers can be
+    registered; none is. The preferences screen shows both as unavailable rather
+    than offering a switch that silently does nothing.
+27d. **No file input exists in any form.** The upload API, the storage driver,
+    the validation and the permission-checked download all work and are tested;
+    the assignment and note forms say so rather than rendering a picker that
+    loses the file. Wiring it up is UI work, not architecture.
+27e. **Only the local storage driver is implemented.** It is wrong for anything
+    horizontally scaled or serverless, where the disk is neither shared nor
+    durable. `STORAGE_DRIVER=s3` fails loudly rather than falling back.
+27f. **`AdminUser.collegeId` is enforced only by the teacher routes.** Null means
+    no restriction, which is what every existing administrator has — so the
+    screens that predate it are unchanged and a college admin can still see
+    other institutions everywhere else.
+27g. **A student who joins a cohort late does not receive earlier notes.**
+    `NoteRecipient` rows are written at publish time. For assignments this is
+    correct (they were not set that work); for notes it is arguably wrong, and
+    a back-fill on profile change would fix it.
+27h. **Teacher search filters the fetched page, not the query.** The name lives
+    on `User` and the page on `TeacherProfile`/`AssignmentStudent`, so a
+    server-side search across both needs a `$lookup`. Fine for a cohort;
+    misleading past a few hundred rows, where a match on page two is not found.
+27. **Subtopics are modelled and unused.** Nothing writes them, so the tutor's "focus on" selector
+    is empty everywhere today.
 
 ## 9. Next steps
 
@@ -1420,6 +2312,31 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
    Curriculum card to `GET /api/enrollments`, which already returns per-course progress.
 8. Instructor surface: draft/publish flow, lesson reordering endpoint.
 9. Payments, if `price` is to mean anything.
+10. Generate and review prepared content at scale — 63 of 9,010 topics have a published explanation,
+    and the other 8,947 open on "Ask the tutor". The workbench and the batch endpoint exist; what is
+    missing is a queue that works through a subject without an operator pressing the button four
+    times, and reviewer capacity.
+11. Close §8 item 24 — immutable versions for `TopicContent`, mirroring `AiCourseContentVersion`, so
+    a regeneration can be diffed against what it replaced before being approved.
+12. Close §8 item 26 — add the curriculum, textbook and AI content models to `ensure-indexes`.
+13. Measure the topic page against §76's 500 ms target on production hardware with a co-located
+    database. The current 1.2 s is `next dev` against a remote Atlas cluster and says little.
+14. Write subtopics, or drop the level. It is carried through the whole stack — schema, context
+    builder, prompt, UI selector — on the strength of §30, and an unused level is a cost paid on
+    every read.
+15. Close §8 items 27a and 27b — a scheduler. Everything downstream of it is
+    built and tested; what is missing is something that calls it on a clock.
+16. Wire file inputs into the assignment, note and submission forms (§8 item
+    27d), then the S3 driver (27e) before any deployment that is not a single
+    server.
+17. An email notification provider, starting with the digest rather than the
+    per-event message — a platform that mails a student every time a teacher
+    publishes is one they mute in a week.
+18. Teacher-side analytics beyond the dashboard's five numbers (§48): completion
+    rate over time, average marks per assignment, and where students stall.
+19. Semantic similarity on the answer cache (§17's later phase), behind a confidence floor.
+    Lexical normalisation already collides the common rephrasings; the gain is in the tail, and the
+    risk of a wrong threshold is a confidently wrong answer served instantly.
 
 ## 10. Document conventions
 

@@ -271,14 +271,41 @@ export const AI_SOURCE_MIME_TYPES: Record<string, string> = {
 
 // ── Providers (spec §23, §24) ────────────────────────────────────────────
 
-export const AI_PROVIDER_TYPES = ["mock", "gemini", "ollama", "openai-compatible", "anthropic"] as const;
+/**
+ * `deepseek`, `groq` and `openai` are listed separately even though all three
+ * are served by one `OpenAICompatibleProvider` class. They are separate *here*
+ * because this list is what a stored document, a routing environment variable
+ * and the usage dashboard all name — and "which provider answered" has to be
+ * answerable as "DeepSeek", not as "one of the OpenAI-compatible ones".
+ *
+ * `vertex` and `gemini` are the same reasoning again: both call Gemini models
+ * over the same wire format, but one authenticates with a Google Cloud service
+ * account and the other with an API key. They bill differently, fail
+ * differently and are configured differently, so a usage dashboard that
+ * collapsed them into "Google" would be unable to answer why the bill moved.
+ */
+export const AI_PROVIDER_TYPES = [
+  "mock",
+  "vertex",
+  "gemini",
+  "ollama",
+  "openai-compatible",
+  "anthropic",
+  "deepseek",
+  "groq",
+  "openai",
+] as const;
 export type AiProviderType = (typeof AI_PROVIDER_TYPES)[number];
 export const AI_PROVIDER_TYPE_LABELS: Record<AiProviderType, string> = {
   mock: "Mock (no external calls)",
-  gemini: "Google Gemini",
+  vertex: "Google Vertex AI",
+  gemini: "Google Gemini (API key)",
   ollama: "Ollama (local)",
   "openai-compatible": "OpenAI-compatible",
   anthropic: "Anthropic",
+  deepseek: "DeepSeek",
+  groq: "Groq",
+  openai: "OpenAI",
 };
 
 // ── AI assistant actions (spec §14, §15) ─────────────────────────────────

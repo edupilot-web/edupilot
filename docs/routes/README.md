@@ -26,17 +26,62 @@ means a new file here plus a row in the tables below.
 | `/privacy` | public | [pages/privacy.md](pages/privacy.md) | placeholder — no text written |
 | `/api-reference` | public | [pages/api-reference.md](pages/api-reference.md) | yes — hand-maintained list |
 | `/dashboard` | session | [pages/dashboard.md](pages/dashboard.md) | yes — cards show static content |
-| 13 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
+| `/curriculum` | session | not written — see [TECHNICAL.md §6.11](../TECHNICAL.md) | yes |
+| `/curriculum/[subjectId]` | session | not written — see [TECHNICAL.md §6.11](../TECHNICAL.md) | yes |
+| `/curriculum/[subjectId]/topics/[topicId]` | session | [pages/curriculum-topic.md](pages/curriculum-topic.md) | yes |
+| `/ai-tutor` | session | not written — see [TECHNICAL.md §6.12](../TECHNICAL.md) | yes — a hub, deliberately not a chat |
+| `/assignments`, `/assignments/[id]` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
+| `/notes`, `/notes/[id]` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
+| `/notifications` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
+| `/profile` | session | not written — see [TECHNICAL.md §6.10](../TECHNICAL.md) | yes — read-only, links to the academic flow in edit mode |
+| `/settings` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — notification preferences |
+| `/teacher/login`, `/teacher/signup` | public | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
+| `/teacher/**` | teacher session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — dashboard, assignments, submissions, notes, students, profile |
+| `/admin/**` | admin session | not written — see [TECHNICAL.md §6.7, §6.9, §6.12, §6.13](../TECHNICAL.md) | yes |
+| 9 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
 
 ## API
 
 | Method | Route | Access | Doc |
 | --- | --- | --- | --- |
 | POST | `/api/auth/register` | public | [api/auth-register.md](api/auth-register.md) |
+| PATCH, POST | `/api/profile/academic` | session | not written — see [TECHNICAL.md §6.10](../TECHNICAL.md) |
 | POST | `/api/auth/login` | public | [api/auth-login.md](api/auth-login.md) |
 | POST | `/api/auth/logout` | anyone | [api/auth-logout.md](api/auth-logout.md) |
 | GET | `/api/auth/me` | session | [api/auth-me.md](api/auth-me.md) |
 | GET | `/api/colleges/search` | session | [api/colleges-search.md](api/colleges-search.md) |
+| POST | `/api/ai/question` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| GET, PATCH | `/api/ai/question/:id` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| POST | `/api/ai/question/:id/retry` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| POST | `/api/ai/topic/deep-dive` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| GET | `/api/ai/conversations`, `/:id` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| GET | `/api/ai/history/topic/:topicId` | session | [api/ai-tutor.md](api/ai-tutor.md) |
+| GET, PUT | `/api/learning/progress` | session | [api/learning.md](api/learning.md) |
+| POST | `/api/learning/events` | session | [api/learning.md](api/learning.md) |
+| GET, POST, DELETE | `/api/learning/bookmarks` | session | [api/learning.md](api/learning.md) |
+| GET | `/api/curriculum/topics/:topicId` | session | [api/learning.md](api/learning.md) |
+| GET | `/api/curriculum/subjects/:id/topics` | session | [api/learning.md](api/learning.md) |
+| GET | `/api/curriculum/search` | session | [api/learning.md](api/learning.md) |
+| POST | `/api/teacher/signup`, `/api/teacher/login` | public | [api/teaching.md](api/teaching.md) |
+| GET, PUT | `/api/teacher/profile` | teacher | [api/teaching.md](api/teaching.md) |
+| GET | `/api/teacher/academic-context`, `/api/teacher/subjects` | teacher | [api/teaching.md](api/teaching.md) |
+| GET, POST | `/api/teacher/assignments` | teacher | [api/teaching.md](api/teaching.md) |
+| GET, PUT | `/api/teacher/assignments/:id` | owning teacher | [api/teaching.md](api/teaching.md) |
+| POST | `/api/teacher/assignments/:id/publish`, `/close` | owning teacher | [api/teaching.md](api/teaching.md) |
+| GET, POST | `/api/teacher/assignments/:id/submissions[/:studentId]` | owning teacher | [api/teaching.md](api/teaching.md) |
+| GET, POST, PUT | `/api/teacher/notes[/:id]` | teacher | [api/teaching.md](api/teaching.md) |
+| POST | `/api/teacher/notes/:id/publish`, `/archive` | owning teacher | [api/teaching.md](api/teaching.md) |
+| GET | `/api/student/assignments[/:id]` | the recipient | [api/teaching.md](api/teaching.md) |
+| POST | `/api/student/assignments/:id/submit` | the recipient | [api/teaching.md](api/teaching.md) |
+| GET | `/api/student/notes[/:id]` | the recipient | [api/teaching.md](api/teaching.md) |
+| POST | `/api/student/notes/:id/bookmark` | the recipient | [api/teaching.md](api/teaching.md) |
+| POST, GET | `/api/files/upload`, `/api/files/:fileId` | per purpose | [api/teaching.md](api/teaching.md) |
+| GET | `/api/notifications`, `/unread-count` | the recipient | [api/notifications.md](api/notifications.md) |
+| PATCH, POST | `/api/notifications/:id/read`, `/read-all` | the recipient | [api/notifications.md](api/notifications.md) |
+| GET, PUT | `/api/notification-preferences` | the owner | [api/notifications.md](api/notifications.md) |
+| GET | `/api/admin/teachers` | `teacher.view` | [api/teaching.md](api/teaching.md) |
+| POST | `/api/admin/teachers/:id/status` | `teacher.approve` | [api/teaching.md](api/teaching.md) |
+| GET, POST, DELETE | `/api/admin/teachers/:id/subjects` | `teacher.assign` | [api/teaching.md](api/teaching.md) |
 | GET, POST | `/api/courses` | public / instructor | [api/courses.md](api/courses.md) |
 | GET, PATCH, DELETE | `/api/courses/:id` | public / owner | [api/courses-id.md](api/courses-id.md) |
 | GET, POST | `/api/courses/:id/lessons` | public / owner | [api/courses-id-lessons.md](api/courses-id-lessons.md) |

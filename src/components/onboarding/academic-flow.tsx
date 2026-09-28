@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/onboarding/combobox";
@@ -105,9 +106,24 @@ export function AcademicFlow({
   resumeStep,
   initialStates,
   comingSoonStates,
+  editing = false,
 }: {
   defaults: FlowDefaults;
   resumeStep: Step;
+  /**
+   * Whether this is a student correcting a finished profile rather than
+   * building one.
+   *
+   * The two are the same flow deliberately. A separate edit screen would be a
+   * second implementation of the cascade — pick a college, and the branch,
+   * regulation, semester and subject lists all have to reload against it — and
+   * the copy of it that students used less often would be the one that drifted.
+   *
+   * All this changes is where "done" goes and what the button says. Everything
+   * that decides which steps exist and what may be chosen is identical, which
+   * is the point.
+   */
+  editing?: boolean;
   /**
    * Rendered on the server so the first screen paints with its options already
    * there. The state list is the one thing every student sees and it never
@@ -156,6 +172,18 @@ export function AcademicFlow({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Suppresses the autosave that would otherwise fire on first render. */
   const hydrated = useRef(false);
+  /**
+   * The current course, for the one effect that must not overwrite a choice the
+   * student has already made.
+   *
+   * A ref rather than a dependency: the course list is fetched per college and
+   * does not depend on which course is selected, so adding `degree` to that
+   * effect would refetch the list every time one is picked.
+   */
+  const degreeRef = useRef(degree);
+  useEffect(() => {
+    degreeRef.current = degree;
+  }, [degree]);
 
   /**
    * Course length, and the graduation year derived from it (§46).
@@ -307,7 +335,14 @@ export function AcademicFlow({
     academic<{ courses: Course[] }>("courses", { collegeId }).then((data) => {
       if (!live || !data) return;
       setCourses(data.courses);
-      if (data.courses.length === 1) changeDegree(data.courses[0].value);
+      /**
+       * Pick the only course for them — but never over a course they already
+       * have. `changeDegree` clears the branch, regulation, semester and
+       * subjects beneath it, so firing this on mount would quietly empty the
+       * profile of any student at a single-course college who opened the flow
+       * to change one field, or who resumed onboarding at the review screen.
+       */
+      if (data.courses.length === 1 && !degreeRef.current) changeDegree(data.courses[0].value);
     });
     return () => {
       live = false;
@@ -386,6 +421,18 @@ export function AcademicFlow({
       return;
     }
     if (!stateId) return;
+    /**
+     * Not while editing a finished profile.
+     *
+     * Autosave exists so a student who abandons onboarding can resume where
+     * they left off. Applied to an edit it would mean a half-changed profile is
+     * already live — pick a new college, close the tab, and the branch,
+     * regulation and subjects are gone with nothing chosen to replace them.
+     *
+     * An edit is therefore atomic: nothing is written until Save, and leaving
+     * the screen keeps the profile the student already had.
+     */
+    if (editing) return;
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -411,7 +458,7 @@ export function AcademicFlow({
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [selection, stateId]);
+  }, [selection, stateId, editing]);
 
   // ── Derived flow shape ───────────────────────────────────────────────
 
@@ -477,10 +524,15 @@ export function AcademicFlow({
      * router cache still holds the value from before this submit. Without the
      * refresh, the completion page can render against a stale profile and
      * bounce the student back into the flow they have just finished.
+     *
+     * An edit needs it for the same reason and one more: every screen that
+     * reads the academic profile — the curriculum, the subject lists, the
+     * assignment feed — is cached against the old coordinate, and the point of
+     * the edit was to change it.
      */
     router.refresh();
-    router.push("/onboarding/complete");
-  }, [selection, steps, router]);
+    router.push(editing ? "/profile?updated=1" : "/onboarding/complete");
+  }, [selection, steps, router, editing]);
 
   const canContinue = ((): boolean => {
     switch (step) {
@@ -520,12 +572,21 @@ export function AcademicFlow({
       <div className="mb-5">
         <div className="flex items-center justify-between">
           <p className="text-[12.5px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-400">
-            Academic Profile
+            {editing ? "Editing your academic profile" : "Academic Profile"}
           </p>
-          <p className="text-[12px] text-slate-400 dark:text-slate-500">
-            Step {stepIndex + 1} of {steps.length}
-            {saving && <span className="ml-2 text-slate-400">saving…</span>}
-          </p>
+          {editing ? (
+            <Link
+              href="/profile"
+              className="text-[12.5px] font-medium text-slate-500 hover:underline dark:text-slate-400"
+            >
+              Cancel
+            </Link>
+          ) : (
+            <p className="text-[12px] text-slate-400 dark:text-slate-500">
+              Step {stepIndex + 1} of {steps.length}
+              {saving && <span className="ml-2 text-slate-400">saving…</span>}
+            </p>
+          )}
         </div>
         <div className="mt-2 flex gap-1" aria-hidden="true">
           {steps.map((entry, index) => (
@@ -896,7 +957,14 @@ export function AcademicFlow({
         )}
 
         {step === "review" && (
-          <Section title="Everything look right?" blurb="This becomes your academic identity across EduPilot.">
+          <Section
+            title={editing ? "Your academic details" : "Everything look right?"}
+            blurb={
+              editing
+                ? "Change anything that is wrong, then save. Your subjects, assignments and notes follow from these."
+                : "This becomes your academic identity across EduPilot."
+            }
+          >
             <dl className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50">
               <Row label="State" value={states.find((s) => s.value === stateId)?.label ?? "—"} onEdit={() => go("state")} />
               <Row label="Institution" value={college?.name ?? "—"} onEdit={() => go("institution")} />
@@ -962,7 +1030,13 @@ export function AcademicFlow({
               disabled={submitting}
               className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-[15px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60 sm:flex-none sm:px-6"
             >
-              {submitting ? "Completing…" : "Complete profile"}
+              {submitting
+                ? editing
+                  ? "Saving…"
+                  : "Completing…"
+                : editing
+                  ? "Save changes"
+                  : "Complete profile"}
             </button>
           ) : (
             <button

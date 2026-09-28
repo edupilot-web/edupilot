@@ -5,6 +5,11 @@ import { AI_PROVIDER_TYPE_LABELS, type AiProviderType } from "@/lib/admin/ai/fie
 import type { AIProvider } from "@/lib/admin/ai/provider";
 import { GeminiProvider, GEMINI_DEFAULT_MODEL } from "@/lib/admin/ai/providers/gemini";
 import { MockProvider } from "@/lib/admin/ai/providers/mock";
+import { VertexAIProvider, VERTEX_DEFAULT_MODEL } from "@/lib/admin/ai/providers/vertex";
+import {
+  OPENAI_COMPATIBLE_SERVICES,
+  OpenAICompatibleProvider,
+} from "@/lib/admin/ai/providers/openai-compatible";
 
 /**
  * Provider selection and generation settings (spec §23, §24).
@@ -26,16 +31,43 @@ import { MockProvider } from "@/lib/admin/ai/providers/mock";
 
 const PROVIDERS: Record<AiProviderType, () => AIProvider> = {
   mock: () => new MockProvider(),
+  /**
+   * Vertex and Gemini call the same models over the same wire format and share
+   * `gemini-core.ts`; they are separate entries because they authenticate,
+   * bill and fail differently.
+   */
+  vertex: () => new VertexAIProvider(),
   gemini: () => new GeminiProvider(),
-  // Phase 3 slots. Listed so the settings screen can show them as unavailable
-  // rather than pretending the abstraction only has two implementations.
+  /**
+   * Three services, one class. They differ only in a base URL, a key variable
+   * and a default model, which `OPENAI_COMPATIBLE_SERVICES` holds as data.
+   */
+  deepseek: () => new OpenAICompatibleProvider(OPENAI_COMPATIBLE_SERVICES.deepseek),
+  groq: () => new OpenAICompatibleProvider(OPENAI_COMPATIBLE_SERVICES.groq),
+  openai: () => new OpenAICompatibleProvider(OPENAI_COMPATIBLE_SERVICES.openai),
+  "openai-compatible": () =>
+    new OpenAICompatibleProvider(OPENAI_COMPATIBLE_SERVICES["openai-compatible"]),
+  /**
+   * Ollama speaks the same protocol but needs no key, so it cannot reuse the
+   * class above unchanged — `isConfigured` would refuse a correctly-configured
+   * local server. Still a slot, so the settings screen can show it as
+   * unavailable rather than imply the abstraction has only the implementations
+   * that happen to be finished.
+   */
   ollama: () => new MockProvider(),
-  "openai-compatible": () => new MockProvider(),
   anthropic: () => new MockProvider(),
 };
 
 /** Which provider types have a real implementation today (§45). */
-export const IMPLEMENTED_PROVIDERS: AiProviderType[] = ["mock", "gemini"];
+export const IMPLEMENTED_PROVIDERS: AiProviderType[] = [
+  "mock",
+  "vertex",
+  "gemini",
+  "deepseek",
+  "groq",
+  "openai",
+  "openai-compatible",
+];
 
 export function providerFor(type: AiProviderType): AIProvider {
   return (PROVIDERS[type] ?? PROVIDERS.mock)();
@@ -145,10 +177,11 @@ export async function resolveAiSettings(): Promise<ResolvedAiSettings> {
 }
 
 export function defaultModelFor(type: AiProviderType): string {
+  if (type === "vertex") return VERTEX_DEFAULT_MODEL;
   if (type === "gemini") return GEMINI_DEFAULT_MODEL;
   if (type === "ollama") return "llama3.1";
   if (type === "mock") return "mock-1";
-  return "";
+  return OPENAI_COMPATIBLE_SERVICES[type]?.defaultModel ?? "";
 }
 
 /**
@@ -162,27 +195,58 @@ export function defaultModelFor(type: AiProviderType): string {
 export async function ensureProviderConfigs(): Promise<(AiProviderConfigDoc & { _id: Types.ObjectId })[]> {
   await connectDB();
 
-  const existing = await AiProviderConfig.countDocuments({});
-  if (existing === 0) {
-    await AiProviderConfig.create([
-      {
-        providerName: AI_PROVIDER_TYPE_LABELS.mock,
-        providerType: "mock",
-        model: "mock-1",
-        enabled: true,
-        isDefault: true,
+  /**
+   * Backfill a row per implemented provider, rather than seeding only an empty
+   * collection.
+   *
+   * The seed-once version left every existing deployment unable to see a
+   * provider added after its first run: `vertex` shipped, the code supported it,
+   * and the settings screen — which renders from these documents — had no row to
+   * show. The only way to enable it was a manual database edit, which is exactly
+   * the kind of step that gets done on one environment and forgotten on the
+   * next.
+   *
+   * Inserting is all this does. An existing row keeps its `enabled`, `isDefault`
+   * and tuning untouched, so a backfill can never switch a provider on, change
+   * which one is default, or start spending money.
+   */
+  const rows = await AiProviderConfig.find({}).select("providerType").lean();
+  const present = new Set(rows.map((row) => String(row.providerType)));
+
+  const wanted: {
+    providerType: AiProviderType;
+    model: string;
+    configuration?: Record<string, unknown>;
+  }[] = [
+    { providerType: "mock", model: "mock-1" },
+    { providerType: "vertex", model: VERTEX_DEFAULT_MODEL },
+    {
+      providerType: "gemini",
+      model: GEMINI_DEFAULT_MODEL,
+      configuration: { endpoint: "https://generativelanguage.googleapis.com/v1beta" },
+    },
+  ];
+
+  const missing = wanted.filter((entry) => !present.has(entry.providerType));
+
+  if (missing.length) {
+    await AiProviderConfig.create(
+      missing.map((entry) => ({
+        providerName: AI_PROVIDER_TYPE_LABELS[entry.providerType],
+        providerType: entry.providerType,
+        model: entry.model,
+        /**
+         * Everything arrives **off**, including the mock, unless this is the
+         * very first run and there is nothing else to fall back to. A provider
+         * that enabled itself on deploy would start calling a paid API because
+         * someone shipped a release.
+         */
+        enabled: rows.length === 0 && entry.providerType === "mock",
+        isDefault: rows.length === 0 && entry.providerType === "mock",
         temperature: 0.4,
-      },
-      {
-        providerName: AI_PROVIDER_TYPE_LABELS.gemini,
-        providerType: "gemini",
-        model: GEMINI_DEFAULT_MODEL,
-        enabled: false,
-        isDefault: false,
-        temperature: 0.4,
-        configuration: { endpoint: "https://generativelanguage.googleapis.com/v1beta" },
-      },
-    ]);
+        ...(entry.configuration ? { configuration: entry.configuration } : {}),
+      }))
+    );
   }
 
   return AiProviderConfig.find({}).sort({ isDefault: -1, providerType: 1 }).lean() as Promise<

@@ -288,13 +288,26 @@ export async function GET(req: NextRequest) {
         if (!collegeId) return ok({ regulations: [] });
         const degree = params.get("degree") ?? "";
 
+        /**
+         * A regulation may be scoped to a programme, to a degree, to both or to
+         * neither, and an unscoped one applies to the whole college.
+         *
+         * Each filter is therefore only applied when the caller supplies it.
+         * Written as `$or: [{ degree: null }, ...(degree ? [{ degree }] : [])]`
+         * this used to collapse to `$or: [{ degree: null }]` whenever no degree
+         * was passed — narrowing an *absent* filter to "only the unscoped ones"
+         * rather than widening it to all of them, so a college whose
+         * regulations all name a degree returned an empty list and the flow
+         * decided it had no curriculum at all.
+         */
+        const scope: Record<string, unknown>[] = [];
+        if (programId) scope.push({ $or: [{ programId: null }, { programId }] });
+        if (degree) scope.push({ $or: [{ degree: null }, { degree }] });
+
         const rows = await Regulation.find({
           collegeId,
           status: { $ne: "archived" },
-          $and: [
-            { $or: [{ programId: null }, ...(programId ? [{ programId }] : [])] },
-            { $or: [{ degree: null }, ...(degree ? [{ degree }] : [])] },
-          ],
+          ...(scope.length ? { $and: scope } : {}),
         })
           .select("code name effectiveFromYear effectiveToYear totalSemesters status")
           .sort({ effectiveFromYear: -1 })

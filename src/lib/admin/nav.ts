@@ -117,6 +117,15 @@ export const ADMIN_NAV: AdminNavSection[] = [
         keywords: ["branch", "cse", "ece", "hod"],
       },
       {
+        label: "Teachers",
+        href: "/admin/teachers",
+        permissions: ["teacher.view"],
+        blurb: "Approve teacher accounts and decide which subjects each one may publish to.",
+        built: true,
+        matchPrefix: true,
+        keywords: ["teacher", "staff", "faculty", "approve", "assign", "subject"],
+      },
+      {
         label: "Courses / Programs",
         href: "/admin/programs",
         permissions: ["academic.view"],
@@ -323,6 +332,15 @@ export const ADMIN_NAV: AdminNavSection[] = [
         built: true,
         matchPrefix: true,
         keywords: ["jobs", "queue", "retry", "failed", "tokens"],
+      },
+      {
+        label: "Topic Content",
+        href: "/admin/ai/topic-content",
+        permissions: ["topic_content.view"],
+        blurb: "The prepared explanation students read on each topic, and its review queue.",
+        built: true,
+        matchPrefix: true,
+        keywords: ["topic", "explanation", "review", "publish", "tutor", "learning"],
       },
       {
         label: "AI Settings",

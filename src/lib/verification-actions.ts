@@ -255,7 +255,7 @@ export async function verifyCodeAction(
 
   redirect(
     destinationFor(
-      { needsEmailVerification: false, profileCompleted: user.profileCompleted },
+      { needsEmailVerification: false, profileCompleted: user.profileCompleted, role: user.role },
       next
     )
   );

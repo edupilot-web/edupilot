@@ -23,11 +23,24 @@ export const metadata: Metadata = { title: "Your academic profile · EduPilot" }
 export default async function AcademicStepPage(props: PageProps<"/onboarding/academic">) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  // A finished profile has nothing to do here, and a bookmarked step must not
-  // become a way to overwrite one.
-  if (user.profileCompleted) redirect("/dashboard");
 
-  await props.searchParams;
+  /**
+   * `?edit=1` is a student coming back to correct their profile (§33).
+   *
+   * Without it a finished profile is bounced to the dashboard, because a
+   * bookmarked step must not become a way to half-overwrite one. But that guard
+   * used to be absolute, which left a student whose derived semester or branch
+   * was wrong with nothing to do about it — `/curriculum` told them to check
+   * their profile and there was no screen that could change it.
+   *
+   * The flag only decides where the student may land; it grants nothing. Every
+   * save still goes through the same server-side resolution and the same
+   * completeness bar (§30, §34).
+   */
+  const params = await props.searchParams;
+  const editing = params.edit === "1";
+  if (user.profileCompleted && !editing) redirect("/dashboard");
+
   await connectDB();
 
   /**
@@ -62,11 +75,19 @@ export default async function AcademicStepPage(props: PageProps<"/onboarding/aca
     .filter((state) => (byState.get(String(state._id)) ?? 0) === 0)
     .map((state) => state.name);
 
+  /**
+   * An editing student starts on the review screen, not at the step they were
+   * last nudged towards. They came to change one thing, and the review screen
+   * is the only one that shows everything with a way into each of them.
+   */
+  const resumeStep: Step = editing ? "review" : ((saved?.onboardingStep as Step) || "state");
+
   return (
     <AcademicFlow
+      editing={editing}
       initialStates={available}
       comingSoonStates={comingSoon}
-      resumeStep={(saved?.onboardingStep as Step) || "state"}
+      resumeStep={resumeStep}
       defaults={{
         stateId: saved?.stateId ? String(saved.stateId) : "",
         collegeId: saved?.collegeId ? String(saved.collegeId) : "",

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import {
   BookIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -11,6 +12,7 @@ import {
 } from "@/components/icons";
 import { APP_ROUTES } from "@/lib/app-routes";
 import type { SubjectUnit, SubjectView } from "@/lib/curriculum/student-curriculum";
+import type { SubjectTopics, TopicCard } from "@/lib/learning/topics";
 
 /**
  * One subject: its syllabus units, and the textbook reading mapped onto each.
@@ -20,7 +22,19 @@ import type { SubjectUnit, SubjectView } from "@/lib/curriculum/student-curricul
  * revise against; the book is how they cover it. It is also the order the data
  * enforces, since generated content is addressed by unit and topic number.
  */
-export function SubjectDetail({ subject }: { subject: SubjectView }) {
+export function SubjectDetail({
+  subject,
+  topics,
+}: {
+  subject: SubjectView;
+  /**
+   * Null when the subject is not this student's — which the page has already
+   * turned into a 404 by the time this renders. Typed nullable anyway so the
+   * component cannot be handed a subject it may show alongside a topic list it
+   * may not, which is the one combination that would leak across curricula.
+   */
+  topics: SubjectTopics | null;
+}) {
   // The first unit starts open. Everything collapsed is a wall of chevrons that
   // tells a new visitor nothing about what is behind them.
   const [open, setOpen] = useState<Set<number>>(
@@ -82,6 +96,8 @@ export function SubjectDetail({ subject }: { subject: SubjectView }) {
           </p>
         )}
       </header>
+
+      {topics && topics.totalTopics > 0 && <Topics topics={topics} subjectId={subject.id} />}
 
       {subject.books.length > 0 && <Books subject={subject} />}
 
@@ -157,6 +173,165 @@ export function SubjectDetail({ subject }: { subject: SubjectView }) {
     </div>
   );
 }
+
+/**
+ * The learnable topics of this subject (§7).
+ *
+ * Distinct from the Syllabus section below it, and above it on the page,
+ * because the two answer different questions. The syllabus is what the exam
+ * covers, quoted from the regulation; this is the list a student clicks through
+ * to actually study, with their own progress against each row. Collapsing them
+ * would mean either making the official syllabus clickable — implying every
+ * line of it has a page behind it — or burying the study path inside a
+ * reference document.
+ *
+ * Grouped by unit where the topics carry one, because that is the shape the
+ * course is taught in and the shape the exam paper follows.
+ */
+function Topics({ topics, subjectId }: { topics: SubjectTopics; subjectId: string }) {
+  const groups = groupByUnit(topics.topics);
+  const percent = topics.totalTopics
+    ? Math.round((topics.completedTopics / topics.totalTopics) * 100)
+    : 0;
+
+  return (
+    <section className="mt-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-[16px] font-semibold text-slate-900 dark:text-white">Topics</h2>
+        <p className="text-[13px] text-slate-400 dark:text-slate-500">
+          {topics.completedTopics} of {topics.totalTopics} completed
+        </p>
+      </div>
+
+      <div
+        role="progressbar"
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Topics completed"
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"
+      >
+        <div
+          className="h-full rounded-full bg-blue-600 transition-[width]"
+          style={{ width: percent + "%" }}
+        />
+      </div>
+
+      <div className="mt-4 space-y-5">
+        {groups.map((group) => (
+          <div key={group.key}>
+            {group.unitNumber !== null && (
+              <p className="px-1 pb-2 text-[11.5px] font-semibold uppercase tracking-wide text-slate-400">
+                Unit {group.unitNumber}
+                {group.unitTitle ? " — " + group.unitTitle : ""}
+              </p>
+            )}
+
+            <ol className="space-y-1.5">
+              {group.topics.map((topic) => (
+                <li key={topic.id}>
+                  <Link
+                    href={`${APP_ROUTES.curriculum}/${subjectId}/topics/${topic.id}`}
+                    className="flex items-start gap-3 rounded-xl border border-slate-200/80 bg-white p-3.5 transition hover:border-blue-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-blue-500/40"
+                  >
+                    <span
+                      className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg text-[12px] font-bold ${
+                        topic.status === "completed"
+                          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"
+                          : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                      }`}
+                    >
+                      {topic.status === "completed" ? (
+                        <CheckIcon className="h-3.5 w-3.5" />
+                      ) : (
+                        topic.sequence
+                      )}
+                    </span>
+
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[14px] font-medium leading-snug text-slate-900 dark:text-white">
+                        {topic.title}
+                      </span>
+
+                      <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-slate-400 dark:text-slate-500">
+                        <span className="capitalize">{topic.difficulty}</span>
+                        {topic.subtopicCount > 0 && <span>{topic.subtopicCount} subtopics</span>}
+                        {topic.estimatedMinutes && (
+                          <span className="inline-flex items-center gap-1">
+                            <ClockIcon className="h-3 w-3" />
+                            {topic.estimatedMinutes} min
+                          </span>
+                        )}
+                        {/*
+                          Said plainly rather than left to be discovered. A
+                          student choosing what to open next needs to know which
+                          topics have a written explanation waiting and which
+                          will start with the tutor.
+                        */}
+                        {topic.hasContent ? (
+                          <span className="text-blue-600 dark:text-blue-400">Explanation ready</span>
+                        ) : (
+                          <span>Ask the tutor</span>
+                        )}
+                      </span>
+
+                      {topic.progressPercentage > 0 && topic.status !== "completed" && (
+                        <span className="mt-1.5 block h-1 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                          <span
+                            className="block h-full rounded-full bg-blue-500"
+                            style={{ width: topic.progressPercentage + "%" }}
+                          />
+                        </span>
+                      )}
+                    </span>
+
+                    <ChevronRightIcon className="mt-2 h-4 w-4 shrink-0 text-slate-300 dark:text-slate-600" />
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+type TopicGroup = {
+  key: string;
+  unitNumber: number | null;
+  unitTitle: string | null;
+  topics: TopicCard[];
+};
+
+/**
+ * Group in list order rather than by sorting into a map.
+ *
+ * The topics arrive ordered by `sequence`, and that order is the curriculum's.
+ * Bucketing by unit number and re-emitting the buckets would silently reorder a
+ * subject whose units are taught out of numeric order, which some regulations
+ * do.
+ */
+function groupByUnit(topics: TopicCard[]): TopicGroup[] {
+  const groups: TopicGroup[] = [];
+
+  for (const topic of topics) {
+    const last = groups.at(-1);
+    if (last && last.unitNumber === (topic.unitNumber ?? null)) {
+      last.topics.push(topic);
+      continue;
+    }
+    groups.push({
+      key: `${topic.unitNumber ?? "none"}-${topic.sequence}`,
+      unitNumber: topic.unitNumber ?? null,
+      unitTitle: topic.unitTitle ?? null,
+      topics: [topic],
+    });
+  }
+
+  return groups;
+}
+
 
 function Books({ subject }: { subject: SubjectView }) {
   return (

@@ -14,6 +14,9 @@ export const APP_ROUTES = {
   scoreBooster: "/score-booster",
   mockInterviews: "/mock-interviews",
   curriculum: "/curriculum",
+  assignments: "/assignments",
+  notes: "/notes",
+  notifications: "/notifications",
   timetable: "/timetable",
   noticeBoard: "/notice-board",
   events: "/events",
@@ -28,3 +31,21 @@ export const APP_ROUTES = {
 export type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 
 export const PROTECTED_PATHS: readonly string[] = Object.values(APP_ROUTES);
+
+/**
+ * The teacher application.
+ *
+ * A separate list because it is a separate shell with a separate gate: these
+ * routes need a session *and* the teacher role, which `(teacher)/layout.tsx`
+ * checks. `/teacher/login` and `/teacher/signup` are deliberately absent —
+ * they are how a teacher gets a session in the first place.
+ */
+export const TEACHER_ROUTES = {
+  dashboard: "/teacher/dashboard",
+  assignments: "/teacher/assignments",
+  notes: "/teacher/notes",
+  students: "/teacher/students",
+  profile: "/teacher/profile",
+} as const;
+
+export const TEACHER_PROTECTED_PATHS: readonly string[] = Object.values(TEACHER_ROUTES);

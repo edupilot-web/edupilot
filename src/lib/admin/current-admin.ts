@@ -20,6 +20,15 @@ export type CurrentAdmin = {
   permissions: string[];
   twoFactorEnabled: boolean;
   lastLoginAt: Date | null;
+  /**
+   * The college this administrator is confined to, or null for platform-wide.
+   *
+   * Read by the teacher-management routes (§56). Null is the state every
+   * existing administrator is in, and means no restriction — so adding the
+   * field changed nothing about the screens that predate it.
+   */
+  collegeId: string | null;
+  collegeName: string | null;
 };
 
 /**
@@ -40,7 +49,7 @@ export const getCurrentAdmin = cache(async (): Promise<CurrentAdmin | null> => {
 
   await connectDB();
   const admin = await AdminUser.findById(session.sub)
-    .select("name email roleId roleName team title avatarUrl extraPermissions deniedPermissions status twoFactorEnabled lastLoginAt")
+    .select("name email roleId roleName team title avatarUrl extraPermissions deniedPermissions status twoFactorEnabled lastLoginAt collegeId collegeName")
     .lean();
 
   // The cookie outlived the account, or the account was suspended mid-session.
@@ -68,6 +77,8 @@ export const getCurrentAdmin = cache(async (): Promise<CurrentAdmin | null> => {
     permissions,
     twoFactorEnabled: admin.twoFactorEnabled === true,
     lastLoginAt: admin.lastLoginAt ?? null,
+    collegeId: admin.collegeId ? String(admin.collegeId) : null,
+    collegeName: admin.collegeName ?? null,
   };
 });
 

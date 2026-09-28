@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/app/app-shell";
 import { appGateRedirect } from "@/lib/auth-routing";
 import { getCurrentUser } from "@/lib/current-user";
-import { UNREAD_NOTIFICATIONS } from "@/lib/dashboard-data";
+import { unreadCount } from "@/lib/notifications/service";
 
 /**
  * Gate and chrome for every signed-in screen.
@@ -24,8 +24,17 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const elsewhere = appGateRedirect(user);
   if (elsewhere) redirect(elsewhere);
 
+  /**
+   * The bell's badge, from the real collection rather than a constant.
+   *
+   * One indexed count on every signed-in page load. It is capped at 100 in the
+   * service, so a student with a thousand unread rows costs the same as one
+   * with five.
+   */
+  const unread = await unreadCount(user.id);
+
   return (
-    <AppShell name={user.name} unread={UNREAD_NOTIFICATIONS}>
+    <AppShell name={user.name} unread={unread}>
       {children}
     </AppShell>
   );

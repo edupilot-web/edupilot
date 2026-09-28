@@ -164,6 +164,9 @@ async function destinationForAccount(user: UserDocument, next: string): Promise<
       // Skipped while unverified: the answer cannot change the destination, and
       // there is no reason to query for it.
       profileCompleted: unverified ? false : await isProfileCompleted(user._id.toString()),
+      // A teacher may arrive through this path too; the role decides whether
+      // student onboarding applies to them at all.
+      role: user.role,
     },
     next
   );

@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import {
-  CampusWalletCard,
-  DailyTasksCard,
-  NoticeBoardCard,
-  PlacementsCard,
-  StreaksCard,
-  TimetableCard,
+  AssignmentsCard,
+  ComingSoonCard,
+  NotesCard,
+  SemesterCard,
+  StudyCard,
 } from "@/components/app/dashboard-cards";
 import { getCurrentUser } from "@/lib/current-user";
+import { getDashboard } from "@/lib/dashboard-data";
 
 export const metadata: Metadata = { title: "Dashboard · EduPilot" };
 
@@ -31,6 +31,13 @@ export default async function DashboardPage() {
 
   const firstName = user.name.trim().split(/\s+/)[0];
 
+  /**
+   * One loader for the whole screen. The cards are rendered together, so six
+   * separate queries would be six round trips to paint one page — and they
+   * share the profile read that resolves the semester.
+   */
+  const data = await getDashboard(user.id);
+
   return (
     <div>
       <h1 className="text-[28px] font-bold tracking-tight text-slate-900 sm:text-[32px] dark:text-white">
@@ -47,12 +54,11 @@ export default async function DashboardPage() {
         cards elide instead.
       */}
       <div className="mt-7 grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <DailyTasksCard />
-        <CampusWalletCard />
-        <StreaksCard />
-        <TimetableCard />
-        <NoticeBoardCard />
-        <PlacementsCard />
+        <SemesterCard data={data} />
+        <AssignmentsCard data={data} />
+        <StudyCard data={data} />
+        <NotesCard data={data} />
+        <ComingSoonCard />
       </div>
     </div>
   );

@@ -49,6 +49,22 @@ const adminUserSchema = new Schema(
     deniedPermissions: { type: [String], default: [] },
 
     /** Free-text grouping — "Institution Data", "Support", "Growth". */
+    /**
+     * Confines this administrator to one college, or null for platform-wide.
+     *
+     * Added for the teacher module (§56): a college admin approves *their*
+     * college's teachers and assigns *their* college's subjects, and an
+     * unscoped admin list would show them every institution on the platform.
+     *
+     * Enforced today only by the routes under `/api/admin/teachers` — the
+     * screens that predate it are unchanged and keep working, because null
+     * means "no restriction" and every existing administrator has null. Rolling
+     * it out further is a per-screen decision, not something to retrofit
+     * silently across an admin surface people already rely on.
+     */
+    collegeId: { type: Schema.Types.ObjectId, ref: "College", default: null, index: true },
+    collegeName: { type: String, default: null, maxlength: 200 },
+
     team: { type: String, default: null, trim: true, maxlength: 80 },
     title: { type: String, default: null, trim: true, maxlength: 120 },
     avatarUrl: { type: String, default: null },

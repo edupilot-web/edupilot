@@ -2,6 +2,7 @@ import type { ComponentType, SVGProps } from "react";
 import {
   BoltIcon,
   BookIcon,
+  ClipboardIcon,
   BriefcaseIcon,
   CalendarIcon,
   DashboardIcon,
@@ -74,6 +75,18 @@ export const NAV_GROUPS: NavGroup[] = [
         href: APP_ROUTES.curriculum,
         icon: BookIcon,
         blurb: "Your courses, their lessons, and how far through each one you are.",
+      },
+      {
+        label: "Assignments",
+        href: APP_ROUTES.assignments,
+        icon: ClipboardIcon,
+        blurb: "Work your teachers have set, what is due, and what you have handed in.",
+      },
+      {
+        label: "Notes",
+        href: APP_ROUTES.notes,
+        icon: FileTextIcon,
+        blurb: "Lecture notes and study material shared for the subjects you are taking.",
       },
       {
         label: "Timetable",

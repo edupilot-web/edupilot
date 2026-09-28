@@ -25,15 +25,42 @@ Documentation, and keep it updated alongside any behaviour change:
 | Validation | Zod                                     |
 | Styling    | Tailwind CSS 4                          |
 | Forms      | Server Actions + `useActionState`        |
+| AI         | Provider-agnostic seam; Vertex AI (primary), Gemini, DeepSeek, Groq, OpenAI or a mock |
+| Files      | Storage-driver seam; local disk today, S3-shaped slot |
 
 ## Getting started
 
 ```bash
 cp .env.example .env.local   # then fill in the values
 npm run seed:colleges        # college directory for the onboarding autocomplete
+npm run seed:curriculum      # regulations and subjects for six engineering colleges
+npm run seed:topics          # topics from that syllabus, plus authored explanations
 npm run seed                 # optional: demo instructor, student, course, lessons
 npm run dev                  # http://localhost:3000
 ```
+
+Tests:
+
+```bash
+npm run test                 # unit — no database needed
+npm run test:integration     # authorization, each suite against its own scratch database
+```
+
+Scheduled work:
+
+```bash
+npm run reminders            # assignment deadline reminders — run every 15-60 minutes
+```
+
+There is no scheduler inside the app. A web app with no worker process cannot hold one
+reliably, so `npm run reminders` is meant for a cron job or a platform scheduler; until
+something calls it, no deadline reminder is sent. The sweep is idempotent, so running it
+more often costs a few queries and sends nothing extra.
+
+The AI tutor runs with **no provider key**: it falls back to a mock that writes clearly-marked
+placeholder text, so the whole student flow — topics, explanations, questions, streaming, caching,
+quotas — works on a fresh clone. Configure a real provider through the `AI_*` variables in
+[.env.example](.env.example) when you want real answers.
 
 `.env.local`:
 

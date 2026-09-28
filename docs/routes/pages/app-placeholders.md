@@ -1,4 +1,4 @@
-# The thirteen unbuilt signed-in routes
+# The nine unbuilt signed-in routes
 
 | | |
 | --- | --- |
@@ -6,7 +6,7 @@
 | Access | session required, exactly like `/dashboard` |
 | Rendering | static Server Components — no session read of their own, no database access |
 
-Of the fourteen destinations in the sidebar, only `/dashboard` is built. The other thirteen are
+Seven of the sixteen destinations in the sidebar are built. The other nine are
 real route files that render
 [ComingSoon](../../../src/components/app/coming-soon.tsx). They are documented together because
 they are the same four-line file with a different `APP_ROUTES` constant — nothing about them
@@ -20,10 +20,8 @@ placeholder page shows as its description.
 
 | Route | Sidebar label | Group | Page title | Blurb shown on screen |
 | --- | --- | --- | --- | --- |
-| `/ai-tutor` | AI Tutor | Main | `AI Tutor · EduPilot` | Ask questions about any topic in your curriculum and work through them step by step. |
 | `/score-booster` | Score Booster | Main | `Score Booster · EduPilot` | Targeted practice sets built from the topics you score lowest on. |
 | `/mock-interviews` | Mock Interviews | Main | `Mock Interviews · EduPilot` | Practise technical and HR rounds, then review the feedback on each answer. |
-| `/curriculum` | Curriculum | Academics | `Curriculum · EduPilot` | Your courses, their lessons, and how far through each one you are. |
 | `/timetable` | Timetable | Academics | `Timetable · EduPilot` | The week's classes, rooms and staff, with today highlighted. |
 | `/notice-board` | Notice Board | Academics | `Notice Board · EduPilot` | Announcements from the department and the college, newest first. |
 | `/events` | Events | Campus | `Events · EduPilot` | Workshops, fests and guest lectures you can register for. |
@@ -31,8 +29,6 @@ placeholder page shows as its description.
 | `/wallet` | Campus Wallet | Campus | `Campus Wallet · EduPilot` | Balance, top-ups and a statement of campus spending. |
 | `/refer` | Refer & Earn | Campus | `Refer & Earn · EduPilot` | Invite a friend to EduPilot and track the rewards you have earned. |
 | `/service-requests` | Service Requests | Support | `Service Requests · EduPilot` | Raise a request for documents, hostel or IT support and follow its progress. |
-| `/profile` | My Profile | Support | `My Profile · EduPilot` | Your details, course, and the account you sign in with. |
-| `/settings` | Settings | Support | `Settings · EduPilot` | Notification preferences, appearance and password. |
 
 ## What a placeholder page contains
 

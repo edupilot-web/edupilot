@@ -5,8 +5,26 @@
  * can import them without pulling mongoose into the browser bundle. The models
  * re-export them, so server-side imports can use either module.
  */
-export const ROLES = ["student", "instructor", "admin"] as const;
+export const ROLES = ["student", "instructor", "admin", "teacher"] as const;
 export type Role = (typeof ROLES)[number];
+
+/**
+ * Roles a stranger may give themselves.
+ *
+ * `registerSchema` used to accept any member of `ROLES`, which meant
+ * `POST /api/auth/register` would mint an `admin` — a documented gap
+ * (TECHNICAL.md §8) that adding `teacher` would have widened into "anyone can
+ * publish to a college's students". One entry, and it is the only role that
+ * needs no authorisation from anybody.
+ *
+ * `teacher` is deliberately absent even though teachers self-register: they do
+ * it through `/api/teacher/signup`, which sets the role server-side *and*
+ * lands the account in `pending` behind a college's approval. The role alone
+ * grants nothing; what it can reach is `TeacherAcademicAssignment`, which only
+ * an administrator writes.
+ */
+export const SELF_SERVICE_ROLES = ["student"] as const;
+export type SelfServiceRole = (typeof SELF_SERVICE_ROLES)[number];
 
 /**
  * How the account signs in. `email` accounts own a password hash and must

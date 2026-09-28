@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { PROTECTED_PATHS } from "@/lib/app-routes";
+import { PROTECTED_PATHS, TEACHER_PROTECTED_PATHS } from "@/lib/app-routes";
 import { SESSION_COOKIE } from "@/lib/session-cookie";
 
 /**
@@ -16,15 +16,26 @@ import { SESSION_COOKIE } from "@/lib/session-cookie";
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
-  const isProtected = PROTECTED_PATHS.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
-  );
-  if (!isProtected) return NextResponse.next();
+  const matches = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
+
+  const isStudentRoute = PROTECTED_PATHS.some(matches);
+  const isTeacherRoute = TEACHER_PROTECTED_PATHS.some(matches);
+
+  if (!isStudentRoute && !isTeacherRoute) return NextResponse.next();
 
   if (request.cookies.get(SESSION_COOKIE)?.value) return NextResponse.next();
 
   const url = request.nextUrl.clone();
-  url.pathname = "/login";
+  /**
+   * Teachers are bounced to *their* sign-in page.
+   *
+   * Sending them to `/login` would work — it is the same cookie — but it would
+   * land them on a screen that talks about coursework and offers a student
+   * sign-up, and the `?next=` would then carry them somewhere the student gate
+   * refuses. The role check still happens in the teacher layout; this is only
+   * about which door an anonymous request is shown.
+   */
+  url.pathname = isTeacherRoute ? "/teacher/login" : "/login";
   url.search = "";
   url.searchParams.set("next", `${pathname}${search}`);
   return NextResponse.redirect(url);
@@ -42,6 +53,14 @@ export const config = {
     "/score-booster/:path*",
     "/mock-interviews/:path*",
     "/curriculum/:path*",
+    "/assignments/:path*",
+    "/notes/:path*",
+    "/notifications/:path*",
+    "/teacher/dashboard/:path*",
+    "/teacher/assignments/:path*",
+    "/teacher/notes/:path*",
+    "/teacher/students/:path*",
+    "/teacher/profile/:path*",
     "/timetable/:path*",
     "/notice-board/:path*",
     "/events/:path*",

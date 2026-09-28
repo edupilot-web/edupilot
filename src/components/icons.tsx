@@ -452,3 +452,42 @@ export function MinusCircleIcon(props: IconProps) {
     </Outline>
   );
 }
+
+/** Assignments: a clipboard with a line of work on it. */
+export function ClipboardIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M9 4.75h6M9 4.75a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 4.75M9 4.75H7.25a1.5 1.5 0 0 0-1.5 1.5v12.5a1.5 1.5 0 0 0 1.5 1.5h9.5a1.5 1.5 0 0 0 1.5-1.5V6.25a1.5 1.5 0 0 0-1.5-1.5H15" />
+      <path d="M9 11.5h6M9 15h4" />
+    </Outline>
+  );
+}
+
+/** Teacher-side navigation: a person at a board. */
+export function PresentIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M3.75 4.75h16.5v10.5H3.75z" />
+      <path d="M12 15.25v4M9 20.25l3-2 3 2" />
+    </Outline>
+  );
+}
+
+/** Marking and grading. */
+export function CheckSquareIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M4.75 6.25a1.5 1.5 0 0 1 1.5-1.5h11.5a1.5 1.5 0 0 1 1.5 1.5v11.5a1.5 1.5 0 0 1-1.5 1.5H6.25a1.5 1.5 0 0 1-1.5-1.5z" />
+      <path d="m8.75 12.25 2.25 2.25 4.25-4.75" />
+    </Outline>
+  );
+}
+
+/** An uploaded or attached file. */
+export function PaperclipIcon(props: IconProps) {
+  return (
+    <Outline {...props}>
+      <path d="M17.5 10.5 11 17a3.5 3.5 0 0 1-5-5l7.25-7.25a2.5 2.5 0 0 1 3.5 3.5L9.5 15.5a1.5 1.5 0 0 1-2-2l6.25-6.25" />
+    </Outline>
+  );
+}

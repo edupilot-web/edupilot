@@ -6,22 +6,39 @@ import {
   type ProviderOptions,
   type ProviderResult,
 } from "@/lib/admin/ai/provider";
+import {
+  buildGeminiBody,
+  geminiErrorFor,
+  readGeminiFrame,
+  readGeminiResponse,
+  type GeminiFlavour,
+  type GeminiResponse,
+} from "@/lib/admin/ai/providers/gemini-core";
+import { readSseData } from "@/lib/admin/ai/providers/openai-compatible";
 
 /**
- * GeminiProvider (spec §45 phase 2).
+ * GeminiProvider (spec §45 phase 2) — the Generative Language API.
  *
- * Talks to the Generative Language REST API directly rather than through an SDK.
- * One reason: the surface used here is three fields and a fetch, and a dependency
- * that ships its own transport, retry policy and telemetry would have to be
- * reconciled with the job runner's (§19) rather than reused.
+ * Talks to the REST API directly rather than through an SDK. One reason: the
+ * surface used here is three fields and a fetch, and a dependency that ships its
+ * own transport, retry policy and telemetry would have to be reconciled with the
+ * job runner's (§19) rather than reused.
  *
  * The key is read from `process.env` on every call. Not cached in a module
  * variable — a long-lived server would keep serving a rotated-out key — and
  * never from the provider-config document, which §22 forbids and whose contents
  * are returned to the browser by the settings screen.
+ *
+ * The wire format is shared with `VertexAIProvider` through `gemini-core.ts`:
+ * both call the same models and differ only in URL and credential. This class is
+ * the **API-key** path — simpler to set up, so it is the recommended fallback,
+ * while Vertex is the primary because its terms and IAM suit a platform holding
+ * student data.
  */
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
+
+const FLAVOUR: GeminiFlavour = { label: "Gemini", credentialHint: "GEMINI_API_KEY" };
 
 /**
  * The default model.
@@ -30,20 +47,6 @@ const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta";
  * deployment that enabled Gemini without choosing one.
  */
 export const GEMINI_DEFAULT_MODEL = "gemini-2.5-flash";
-
-type GeminiResponse = {
-  candidates?: {
-    content?: { parts?: { text?: string }[] };
-    finishReason?: string;
-  }[];
-  promptFeedback?: { blockReason?: string };
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    totalTokenCount?: number;
-  };
-  error?: { code?: number; message?: string; status?: string };
-};
 
 export class GeminiProvider implements AIProvider {
   readonly type = "gemini" as const;
@@ -69,7 +72,8 @@ export class GeminiProvider implements AIProvider {
     if (!this.isConfigured()) {
       return {
         ok: false,
-        message: "GEMINI_API_KEY is not set. Add it to the environment — it is never stored in the database.",
+        message:
+          "GEMINI_API_KEY is not set. Add it to the environment — it is never stored in the database.",
       };
     }
 
@@ -120,31 +124,13 @@ export class GeminiProvider implements AIProvider {
   ): Promise<ProviderResult> {
     const key = this.key();
     if (!key) {
-      throw new ProviderError(
-        "not-configured",
-        "GEMINI_API_KEY is not set on the server.",
-        { retryable: false }
-      );
+      throw new ProviderError("not-configured", "GEMINI_API_KEY is not set on the server.", {
+        retryable: false,
+      });
     }
 
     const model = options.model || GEMINI_DEFAULT_MODEL;
     const started = Date.now();
-
-    const body: Record<string, unknown> = {
-      systemInstruction: { parts: [{ text: messages.system }] },
-      contents: [{ role: "user", parts: [{ text: messages.user }] }],
-      generationConfig: {
-        temperature: options.temperature,
-        topP: options.topP,
-        maxOutputTokens: options.maxTokens,
-        ...(structured
-          ? {
-              responseMimeType: "application/json",
-              ...(options.jsonSchema ? { responseSchema: options.jsonSchema } : {}),
-            }
-          : {}),
-      },
-    };
 
     const response = await fetchWithTimeout(
       // The key goes in a header, not the query string: a URL is logged by
@@ -156,114 +142,74 @@ export class GeminiProvider implements AIProvider {
           "Content-Type": "application/json",
           "x-goog-api-key": key,
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify(buildGeminiBody(messages, options, structured)),
       },
       { timeoutMs: options.timeoutMs, signal: options.signal }
     );
 
     const payload = (await response.json().catch(() => null)) as GeminiResponse | null;
+    if (!response.ok) throw geminiErrorFor(response.status, payload, FLAVOUR);
 
-    if (!response.ok) throw this.errorFor(response.status, payload);
-    if (!payload) {
-      throw new ProviderError("invalid-response", "Gemini returned a response that could not be read.");
-    }
-    if (payload.error) throw this.errorFor(payload.error.code ?? 500, payload);
-
-    if (payload.promptFeedback?.blockReason) {
-      throw new ProviderError(
-        "content-filtered",
-        `Gemini declined the request (${payload.promptFeedback.blockReason}). Rephrase the instructions or reduce the source material.`,
-        { retryable: false }
-      );
-    }
-
-    const candidate = payload.candidates?.[0];
-    const text = candidate?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
-
-    /**
-     * `MAX_TOKENS` is reported as a normal finish, not an error.
-     *
-     * Treated as a failure here because a truncated academic document is the
-     * most dangerous kind of success: the JSON may still parse, the units array
-     * is simply short, and a reviewer has no way to see that the model was cut
-     * off rather than done.
-     */
-    if (candidate?.finishReason === "MAX_TOKENS") {
-      throw new ProviderError(
-        "token-limit",
-        `The response hit the ${options.maxTokens.toLocaleString("en-IN")} token limit and was truncated. Generate a single unit at a time, or raise the limit in AI Settings.`,
-        { retryable: false }
-      );
-    }
-
-    if (candidate?.finishReason === "SAFETY" || candidate?.finishReason === "PROHIBITED_CONTENT") {
-      throw new ProviderError(
-        "content-filtered",
-        "Gemini stopped generating for safety reasons. Review the subject material and instructions.",
-        { retryable: false }
-      );
-    }
-
-    if (!text.trim()) {
-      throw new ProviderError(
-        "invalid-response",
-        `Gemini returned no content${candidate?.finishReason ? ` (finish reason: ${candidate.finishReason})` : ""}.`
-      );
-    }
-
-    return {
-      text,
-      usage: {
-        promptTokens: payload.usageMetadata?.promptTokenCount ?? 0,
-        completionTokens: payload.usageMetadata?.candidatesTokenCount ?? 0,
-        totalTokens: payload.usageMetadata?.totalTokenCount ?? 0,
-      },
+    return readGeminiResponse(payload, FLAVOUR, {
       model,
-      durationMs: Date.now() - started,
-    };
+      maxTokens: options.maxTokens,
+      startedAt: started,
+    });
   }
 
   /**
-   * Map a transport failure onto the closed error set.
+   * Server-sent events, for §77's progressive answer.
    *
-   * The provider's message is passed through only for the statuses where it is
-   * about the *request* (a bad model name, a malformed schema). For 401 and 403
-   * it is replaced: those responses sometimes echo back part of the credential,
-   * and §32 forbids surfacing provider secrets.
+   * `alt=sse` rather than the default chunked-JSON-array response: without it
+   * Gemini streams a JSON array whose elements arrive split across chunk
+   * boundaries, and reassembling that correctly means writing an incremental
+   * JSON parser. SSE gives framed messages, which `readSseData` already handles
+   * for the OpenAI-compatible providers.
+   *
+   * Deltas only. Accumulating, validating and storing the answer is the caller's
+   * job — a provider that also parsed the result would have to know what shape
+   * the caller wanted.
    */
-  private errorFor(status: number, payload: GeminiResponse | null): ProviderError {
-    const detail = payload?.error?.message;
-
-    if (status === 400) {
-      return new ProviderError(
-        "invalid-response",
-        `Gemini rejected the request${detail ? `: ${detail}` : "."}`,
-        { retryable: false, status }
-      );
-    }
-    if (status === 401 || status === 403) {
-      return new ProviderError(
-        "unauthorized",
-        "Gemini rejected the API key. Check GEMINI_API_KEY on the server.",
-        { retryable: false, status }
-      );
-    }
-    if (status === 404) {
-      return new ProviderError(
-        "not-configured",
-        `Gemini has no such model${detail ? `: ${detail}` : "."} Change the model in AI Settings.`,
-        { retryable: false, status }
-      );
-    }
-    if (status === 429) {
-      return new ProviderError("rate-limited", "Gemini rate limit reached. The job will be retried.", {
-        status,
+  async *stream(
+    messages: ProviderMessage,
+    options: ProviderOptions
+  ): AsyncIterable<{ delta: string; done: boolean }> {
+    const key = this.key();
+    if (!key) {
+      throw new ProviderError("not-configured", "GEMINI_API_KEY is not set on the server.", {
+        retryable: false,
       });
     }
-    if (status >= 500) {
-      return new ProviderError("unavailable", "Gemini is temporarily unavailable.", { status });
+
+    const model = options.model || GEMINI_DEFAULT_MODEL;
+
+    const response = await fetchWithTimeout(
+      `${ENDPOINT}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": key,
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(buildGeminiBody(messages, options, true)),
+      },
+      { timeoutMs: options.timeoutMs, signal: options.signal }
+    );
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as GeminiResponse | null;
+      throw geminiErrorFor(response.status, payload, FLAVOUR);
+    }
+    if (!response.body) {
+      throw new ProviderError("invalid-response", "Gemini returned an empty stream.");
     }
 
-    return new ProviderError("unknown", `Gemini returned an unexpected status ${status}.`, { status });
+    for await (const data of readSseData(response.body)) {
+      const frame = readGeminiFrame(data, FLAVOUR);
+      if (frame) yield { delta: frame.delta, done: false };
+    }
+
+    yield { delta: "", done: true };
   }
 }

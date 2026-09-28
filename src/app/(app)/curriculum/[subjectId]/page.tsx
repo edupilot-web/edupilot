@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { SubjectDetail } from "@/components/app/subject-detail";
 import { getSubjectView } from "@/lib/curriculum/student-curriculum";
+import { getSubjectTopics } from "@/lib/learning/topics";
 import { getCurrentUser } from "@/lib/current-user";
 
 export async function generateMetadata(
@@ -29,8 +30,17 @@ export default async function Page(props: PageProps<"/curriculum/[subjectId]">) 
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const subject = await getSubjectView(user.id, subjectId);
+  /**
+   * Both reads run together: they authorise against the same profile and
+   * neither depends on the other, so sequencing them would double the page's
+   * latency budget (§76) to no purpose.
+   */
+  const [subject, topics] = await Promise.all([
+    getSubjectView(user.id, subjectId),
+    getSubjectTopics(user.id, subjectId),
+  ]);
+
   if (!subject) notFound();
 
-  return <SubjectDetail subject={subject} />;
+  return <SubjectDetail subject={subject} topics={topics} />;
 }

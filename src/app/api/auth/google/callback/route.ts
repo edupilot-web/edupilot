@@ -78,6 +78,8 @@ export async function GET(request: NextRequest) {
       {
         needsEmailVerification: unverified,
         profileCompleted: unverified ? false : await isProfileCompleted(user._id.toString()),
+        // Google sign-in reaches an existing teacher account too.
+        role: user.role,
       },
       expected.next
     );

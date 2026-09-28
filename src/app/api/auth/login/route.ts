@@ -30,6 +30,10 @@ export async function POST(req: NextRequest) {
       next: destinationFor({
         needsEmailVerification: unverified,
         profileCompleted: unverified ? false : await isProfileCompleted(user._id.toString()),
+        // A teacher may sign in here: the account and the session cookie are
+        // the same. Without the role they would be sent into student
+        // onboarding, which they cannot finish and should never see.
+        role: user.role,
       }),
     });
   } catch (err) {

@@ -13,10 +13,15 @@
     "create-admin": "tsx --env-file=.env.local scripts/create-admin.ts",
     "seed:curriculum": "tsx --env-file=.env.local scripts/seed-curriculum.ts",
     "seed:textbooks": "tsx --env-file=.env.local scripts/seed-textbooks.ts",
+    "seed:topics": "tsx --env-file=.env.local scripts/seed-topics.ts",
     "sync:role-permissions": "tsx --env-file=.env.local scripts/sync-role-permissions.ts",
     "ensure-indexes": "tsx --env-file=.env.local scripts/ensure-indexes.ts",
+    "reminders": "tsx --env-file=.env.local scripts/send-reminders.ts",
     "migrate:profiles": "tsx --env-file=.env.local scripts/migrate-student-profiles.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/unit/*.test.ts",
+    "test:integration": "tsx --env-file=.env.local --test tests/integration/*.test.ts",
+    "test:all": "npm run test && npm run test:integration"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

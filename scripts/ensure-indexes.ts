@@ -25,6 +25,23 @@ import { Lesson } from "../src/models/Lesson";
 import { RateLimit } from "../src/models/RateLimit";
 import { Role } from "../src/models/Role";
 import { StudentProfile } from "../src/models/StudentProfile";
+import { Bookmark, LearningEvent, StudentTopicProgress } from "../src/models/Learning";
+import { Subtopic, Topic, TopicContent } from "../src/models/Topic";
+import { TeacherAcademicAssignment, TeacherProfile } from "../src/models/Teacher";
+import {
+  Assignment,
+  AssignmentStudent,
+  AssignmentSubmission,
+} from "../src/models/Assignment";
+import { Note, NoteBookmark, NoteRecipient, NoteView } from "../src/models/Note";
+import { Notification, NotificationPreference } from "../src/models/Notification";
+import { StoredFile } from "../src/models/StoredFile";
+import {
+  AiAnswerCache,
+  AiConversation,
+  AiInteraction,
+  AiUsageDaily,
+} from "../src/models/Tutor";
 import {
   BackgroundJob,
   ErrorLog,
@@ -52,6 +69,20 @@ const MODELS = [
   Course,
   Lesson,
   Enrollment,
+  // Learning: topics, prepared content, progress and the AI tutor.
+  // `LearningEvent` and `AiAnswerCache` carry TTL indexes, which mongo only
+  // creates from a declaration — without this list their documents accumulate
+  // forever in production and nothing reports that they are doing so.
+  Topic,
+  Subtopic,
+  TopicContent,
+  StudentTopicProgress,
+  LearningEvent,
+  Bookmark,
+  AiConversation,
+  AiInteraction,
+  AiAnswerCache,
+  AiUsageDaily,
   // Institution master data
   State,
   District,
@@ -78,6 +109,29 @@ const MODELS = [
   ErrorLog,
   FeatureFlag,
   Setting,
+  /**
+   * Teaching: teachers, the work they set, the notes they share, the files
+   * attached to both, and the notifications that go out.
+   *
+   * Two of these carry indexes that are not merely an optimisation.
+   * `Notification` has a TTL index, which mongo only creates from a
+   * declaration — without it the collection grows forever and nothing reports
+   * that it is doing so. It also has the unique index that makes §63's
+   * deduplication a *guarantee* rather than a hope, so a deployment missing it
+   * would double-notify on every retried fan-out, silently.
+   */
+  TeacherProfile,
+  TeacherAcademicAssignment,
+  Assignment,
+  AssignmentStudent,
+  AssignmentSubmission,
+  Note,
+  NoteRecipient,
+  NoteView,
+  NoteBookmark,
+  Notification,
+  NotificationPreference,
+  StoredFile,
 ];
 
 async function main() {

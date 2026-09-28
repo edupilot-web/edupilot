@@ -17,34 +17,65 @@ import type { AcademicSelection } from "@/lib/onboarding/academic-context";
  * resolved context, so a client cannot assert it.
  */
 
+/**
+ * Read the selection, keeping "absent" and "explicitly null" apart.
+ *
+ * That distinction is the whole of the fix for a data-loss bug this endpoint
+ * used to have. `saveAcademicSelection` writes every field it resolves, so a
+ * key that arrived as `null` merely because the caller did not mention it
+ * cleared a stored value — one `PATCH {"currentSemester": 5}` wiped a
+ * student's college, branch, regulation, batch and subjects and bounced them
+ * back into onboarding.
+ *
+ * Only keys actually present in the body are carried forward now.
+ * `saveAcademicSelection` fills the rest from the stored profile, so a partial
+ * update is genuinely partial and an explicit `null` still clears a field.
+ *
+ * The browser flow always sends the whole selection, so it never triggered
+ * this — which is exactly why it was worth fixing rather than relying on every
+ * future caller being equally generous.
+ */
 function readSelection(body: Record<string, unknown>): AcademicSelection {
-  const str = (key: string): string | null => {
+  const selection: Record<string, unknown> = {};
+
+  const str = (key: string): void => {
+    if (!(key in body)) return;
     const value = body[key];
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-  };
-  const num = (key: string): number | null => {
-    const value = body[key];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
-    return null;
+    selection[key] = typeof value === "string" && value.trim() ? value.trim() : null;
   };
 
-  return {
-    stateId: str("stateId"),
-    collegeId: str("collegeId"),
-    universityId: str("universityId"),
-    programId: str("programId"),
-    branchId: str("branchId"),
-    regulationId: str("regulationId"),
-    admissionYear: num("admissionYear"),
-    admissionType: str("admissionType"),
-    currentYear: num("currentYear"),
-    currentSemester: num("currentSemester"),
-    graduationYear: num("graduationYear"),
-    subjectIds: Array.isArray(body.subjectIds)
-      ? body.subjectIds.filter((entry): entry is string => typeof entry === "string")
-      : [],
+  const num = (key: string): void => {
+    if (!(key in body)) return;
+    const value = body[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      selection[key] = value;
+    } else if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) {
+      selection[key] = Number(value);
+    } else {
+      selection[key] = null;
+    }
   };
+
+  str("stateId");
+  str("collegeId");
+  str("universityId");
+  str("programId");
+  str("branchId");
+  str("regulationId");
+  str("admissionType");
+
+  num("admissionYear");
+  num("currentYear");
+  num("currentSemester");
+  num("graduationYear");
+
+  if ("subjectIds" in body) {
+    selection.subjectIds = Array.isArray(body.subjectIds)
+      ? body.subjectIds.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }
+
+  return selection as AcademicSelection;
 }
 
 async function handle(req: Request, partial: boolean) {

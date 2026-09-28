@@ -4,7 +4,7 @@ import {
   MAX_STUDY_YEAR,
   MIN_GRADUATION_YEAR,
   MIN_STUDY_YEAR,
-  ROLES,
+  SELF_SERVICE_ROLES,
   STUDY_STATUSES,
   maxGraduationYear,
 } from "@/lib/user-fields";
@@ -25,7 +25,13 @@ export const registerSchema = z.object({
   name: z.string().min(2).max(120),
   email: z.string().email().toLowerCase(),
   password: passwordSchema,
-  role: z.enum(ROLES).optional(),
+  /**
+   * Only `student`. The field used to accept any role, which made
+   * `POST /api/auth/register` a way to mint an administrator — and, once
+   * `teacher` existed, a way to reach a college's students. Teachers sign up
+   * through their own endpoint, which sets the role server-side.
+   */
+  role: z.enum(SELF_SERVICE_ROLES).optional(),
 });
 
 export const loginSchema = z.object({

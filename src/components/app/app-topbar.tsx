@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { APP_ROUTES } from "@/lib/app-routes";
 import { useEffect, useRef, useState } from "react";
 import { BellIcon, ChevronDownIcon, LogOutIcon, MenuIcon, SearchIcon, SettingsIcon, UserIcon } from "@/components/icons";
 import { logoutAction } from "@/lib/auth-actions";
@@ -78,9 +79,13 @@ export function AppTopbar({
       </form>
 
       <div className="ml-auto flex items-center gap-1.5 sm:gap-2.5">
-        <button
-          type="button"
-          onClick={() => onUnavailable("Notifications")}
+        {/*
+          A real link now that there is a screen behind it. The count is the
+          badge's only job — the number itself lives on the notification centre,
+          because a two-digit bubble on a 360px top bar is unreadable.
+        */}
+        <Link
+          href={APP_ROUTES.notifications}
           aria-label={unread ? `Notifications (${unread} unread)` : "Notifications"}
           className="relative grid h-10 w-10 place-items-center rounded-full text-slate-500 transition hover:bg-slate-200/70 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:hover:bg-slate-800"
         >
@@ -88,7 +93,7 @@ export function AppTopbar({
           {unread > 0 && (
             <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-[#f7f9fc] dark:ring-slate-950" />
           )}
-        </button>
+        </Link>
 
         <div ref={menuRef} className="relative">
           <button
