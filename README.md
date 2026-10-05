@@ -27,7 +27,7 @@ Documentation, and keep it updated alongside any behaviour change:
 | Forms      | Server Actions + `useActionState`        |
 | AI         | Provider-agnostic seam; Vertex AI (primary), Gemini, DeepSeek, Groq, OpenAI or a mock |
 | Files      | Storage-driver seam; local disk today, S3-shaped slot |
-| Payments   | Razorpay: wallet top-ups, an append-only ledger, webhook settlement |
+| Payments   | Razorpay SDK: wallet top-ups, an append-only ledger, webhook settlement |
 
 ## Getting started
 

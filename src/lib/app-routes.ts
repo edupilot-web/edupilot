@@ -44,6 +44,7 @@ export const TEACHER_ROUTES = {
   dashboard: "/teacher/dashboard",
   assignments: "/teacher/assignments",
   notes: "/teacher/notes",
+  notifications: "/teacher/notifications",
   students: "/teacher/students",
   profile: "/teacher/profile",
 } as const;

@@ -52,15 +52,29 @@ const EMPTY: Draft = {
   lateSubmissionUntil: "",
 };
 
+/** An assignment being edited, rather than written from scratch. */
+export type EditableAssignment = Draft & { id: string; status: string };
+
 export function AssignmentForm({
   context,
   canPublish,
+  existing = null,
 }: {
   context: AcademicContextTree;
   canPublish: boolean;
+  /**
+   * Null when writing a new assignment.
+   *
+   * Editing reuses this form rather than getting its own, because the fields,
+   * their validation and the wording of every error are the same — and the copy
+   * teachers used less often would be the one that drifted. What changes is
+   * where it saves and what the buttons say.
+   */
+  existing?: EditableAssignment | null;
 }) {
   const router = useRouter();
-  const [draft, setDraft] = useState<Draft>(EMPTY);
+  const editing = existing !== null;
+  const [draft, setDraft] = useState<Draft>(existing ?? EMPTY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,11 +106,21 @@ export function AssignmentForm({
     setError(null);
 
     try {
-      const response = await fetch("/api/teacher/assignments", {
-        method: "POST",
+      /**
+       * `subjectId` is sent on create and **never** on edit.
+       *
+       * The update schema omits it deliberately: re-pointing published work at
+       * another subject would leave every `AssignmentStudent` row for an
+       * audience that no longer matches, and the students holding them with no
+       * explanation. The field is unrepresentable rather than merely refused.
+       */
+      const response = await fetch(
+        editing ? `/api/teacher/assignments/${existing.id}` : "/api/teacher/assignments",
+        {
+        method: editing ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          subjectId: draft.subjectId,
+          ...(editing ? {} : { subjectId: draft.subjectId }),
           title: draft.title,
           description: draft.description || null,
           instructions: draft.instructions || null,
@@ -108,7 +132,8 @@ export function AssignmentForm({
             ? new Date(draft.lateSubmissionUntil).toISOString()
             : "",
         }),
-      });
+        }
+      );
 
       const payload = (await response.json().catch(() => null)) as
         | { data?: { id?: string; eligibleStudents?: number }; error?: { message?: string } }
@@ -122,6 +147,14 @@ export function AssignmentForm({
       const id = payload.data.id;
 
       if (!publish) {
+        /**
+         * An edit refreshes before navigating.
+         *
+         * The detail page it returns to is server-rendered and the router cache
+         * still holds the version from before this save — without the refresh a
+         * teacher who has just corrected a due date is shown the old one.
+         */
+        if (editing) router.refresh();
         router.push(`/teacher/assignments/${id}`);
         return;
       }
@@ -225,9 +258,24 @@ export function AssignmentForm({
           <label htmlFor="subject" className="block text-[12.5px] font-semibold text-slate-600 dark:text-slate-300">
             Subject
           </label>
+          {editing && (
+            /**
+             * Locked, and the reason is said rather than left to be guessed.
+             *
+             * Moving published work to another subject would strand every
+             * recipient row against an audience that no longer matches. The API
+             * has no field for it; a disabled control with no explanation just
+             * reads as a bug.
+             */
+            <p className="mt-1 mb-1 text-[12.5px] text-slate-400 dark:text-slate-500">
+              The subject cannot be changed after an assignment exists. Delete this one and
+              write a new one if it is filed under the wrong subject.
+            </p>
+          )}
           <select
             id="subject"
             required
+            disabled={editing}
             value={draft.subjectId}
             onChange={(event) =>
               setDraft((current) => ({ ...current, subjectId: event.target.value }))
@@ -384,21 +432,42 @@ export function AssignmentForm({
         <button
           type="submit"
           disabled={busy || !draft.subjectId || !draft.title.trim()}
-          className="rounded-lg border border-slate-200 px-4 py-2.5 text-[14px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          className={
+            editing
+              ? "rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
+              : "rounded-lg border border-slate-200 px-4 py-2.5 text-[14px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          }
         >
-          {busy ? "Saving..." : "Save as draft"}
+          {busy ? "Saving..." : editing ? "Save changes" : "Save as draft"}
         </button>
 
-        <button
-          type="button"
-          disabled={busy || !canPublish || !draft.subjectId || !draft.title.trim()}
-          onClick={() => void save(true)}
-          className="rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
-        >
-          {busy ? "Working..." : "Save and publish"}
-        </button>
+        {/* A published assignment is not published again; it is amended. */}
+        {!editing && (
+          <button
+            type="button"
+            disabled={busy || !canPublish || !draft.subjectId || !draft.title.trim()}
+            onClick={() => void save(true)}
+            className="rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
+          >
+            {busy ? "Working..." : "Save and publish"}
+          </button>
+        )}
 
-        {!canPublish && (
+        {editing && existing.status === "published" && (
+          /**
+           * Said before they save, not after.
+           *
+           * A material change to live work notifies every recipient (§79), and a
+           * teacher fixing a typo at 11pm should know that before they press the
+           * button rather than from the replies.
+           */
+          <p className="self-center text-[12.5px] text-amber-600 dark:text-amber-400">
+            This assignment is live. Changing the deadline, the instructions or the
+            attachments tells your students.
+          </p>
+        )}
+
+        {!editing && !canPublish && (
           <p className="self-center text-[12.5px] text-slate-400">
             Publishing opens up once your account is approved and your email is confirmed.
           </p>

@@ -79,9 +79,28 @@ export default async function Page(props: PageProps<"/teacher/assignments/[id]/s
             )}
           </div>
 
-          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-[11.5px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-            {ASSIGNMENT_STATUS_LABELS[assignment.status as AssignmentStatus]}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            {/**
+             * Editing live work happens here, because a published assignment's
+             * detail page redirects to this one — so without this link there is
+             * no route to correcting a deadline once students can see it.
+             *
+             * Closed work is deliberately left out: the window is over, marks
+             * may be out, and changing the instructions underneath a grade makes
+             * the grade unexplainable.
+             */}
+            {assignment.status === "published" && (
+              <Link
+                href={`${TEACHER_ROUTES.assignments}/${assignment.id}/edit`}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Edit
+              </Link>
+            )}
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11.5px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {ASSIGNMENT_STATUS_LABELS[assignment.status as AssignmentStatus]}
+            </span>
+          </div>
         </div>
 
         <dl className="mt-4 grid grid-cols-3 gap-3 sm:grid-cols-6">

@@ -1,5 +1,6 @@
 import mongoose, { Schema, Model, InferSchemaType } from "mongoose";
 import { resetModelInDev } from "@/models/model-cache";
+import { TEACHER_SIGNUP_MODES } from "@/lib/teaching/fields";
 import {
   ACCREDITATION_BODIES,
   AUTONOMY_STATUSES,
@@ -72,6 +73,35 @@ const collegeSchema = new Schema(
     location: {
       type: { type: String, enum: ["Point"], default: undefined },
       coordinates: { type: [Number], default: undefined },
+    },
+
+    /**
+     * Who may claim a teacher account at this college.
+     *
+     * Absent on every college until an administrator sets it, and absent means
+     * **invite-only** — see `DEFAULT_TEACHER_SIGNUP_MODE`. A college that has
+     * configured nothing should not be claimable by anyone who can find it in a
+     * dropdown, which is what the platform used to allow.
+     */
+    teacherSignup: {
+      mode: { type: String, enum: TEACHER_SIGNUP_MODES, default: null },
+      /**
+       * Email domains whose holders may register themselves, for `domain` mode.
+       *
+       * Stored normalised and bare — `vrsec.ac.in`, never `@vrsec.ac.in` or a
+       * URL — because the match is done against the host part of an address and
+       * a stored `@` would never match anything.
+       */
+      allowedDomains: { type: [String], default: [] },
+      /**
+       * Skip the approval queue for this college.
+       *
+       * Per-college rather than the platform-wide `TEACHER_AUTO_APPROVE` env
+       * flag, which could only be on for everyone or no one — and "on for
+       * everyone" is not something any deployment with more than one college
+       * should be able to express in a single variable.
+       */
+      autoApprove: { type: Boolean, default: false },
     },
 
     // ── Contact ─────────────────────────────────────────────────────────────

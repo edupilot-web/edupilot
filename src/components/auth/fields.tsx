@@ -3,7 +3,7 @@
 import { useId, useState, type ReactNode } from "react";
 import { AlertIcon, CheckIcon, ChevronDownIcon, EyeIcon, EyeOffIcon } from "@/components/icons";
 
-const LABEL = "mb-1.5 block text-[13px] font-medium text-slate-700 dark:text-slate-300";
+export const LABEL = "mb-1.5 block text-[13px] font-medium text-slate-700 dark:text-slate-300";
 
 const INPUT_BASE =
   "w-full rounded-lg border bg-white py-2.5 pr-3 text-[15px] text-slate-900 shadow-[0_1px_2px_rgba(15,23,42,0.04)] outline-none transition placeholder:text-slate-400 disabled:opacity-60 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500";
@@ -13,6 +13,21 @@ const INPUT_IDLE =
 
 const INPUT_INVALID =
   "border-rose-300 focus:border-rose-500 focus:ring-4 focus:ring-rose-500/10 dark:border-rose-500/60";
+
+/**
+ * For inputs this file cannot own — the teacher college combobox, which needs
+ * its own focus and keyboard handling.
+ *
+ * Exported rather than copied so there is one description of what an input in
+ * this product looks like. The teacher forms carried a parallel copy that had
+ * no dark variants, and the difference only showed up once they were rendered
+ * beside the student ones.
+ */
+export const INPUT_PLAIN = `${INPUT_BASE} ${INPUT_IDLE} pl-3.5`;
+
+/** A value the visitor may read but not change — fixed by an invitation. */
+export const INPUT_READONLY =
+  "w-full rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-3.5 pr-3 text-[15px] text-slate-500 outline-none dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400";
 
 /** Renders the first message for a field; the rest are redundant in practice. */
 export function FieldError({ id, messages }: { id: string; messages?: string[] }) {
@@ -61,7 +76,17 @@ export function TextField({
   hint,
   errors,
   type = "text",
-}: BaseFieldProps & { type?: "text" | "email" }) {
+  readOnly,
+}: BaseFieldProps & {
+  type?: "text" | "email";
+  /**
+   * Fixed by something the visitor cannot argue with — an invitation naming
+   * the mailbox it was issued to. Read-only rather than disabled: a disabled
+   * input is skipped by the keyboard and not read out, and this is a value the
+   * person needs to be able to check.
+   */
+  readOnly?: boolean;
+}) {
   const id = useId();
   const errorId = `${id}-error`;
   const hintId = `${id}-hint`;
@@ -86,9 +111,14 @@ export function TextField({
           onChange={(event) => onChange(event.target.value)}
           placeholder={placeholder}
           autoComplete={autoComplete}
+          readOnly={readOnly}
           aria-invalid={invalid || undefined}
           aria-describedby={invalid ? errorId : hint ? hintId : undefined}
-          className={`${INPUT_BASE} ${invalid ? INPUT_INVALID : INPUT_IDLE} ${icon ? "pl-10" : "pl-3.5"}`}
+          className={
+            readOnly
+              ? `${INPUT_READONLY} ${icon ? "pl-10" : ""}`
+              : `${INPUT_BASE} ${invalid ? INPUT_INVALID : INPUT_IDLE} ${icon ? "pl-10" : "pl-3.5"}`
+          }
         />
       </div>
       {hint && !invalid && (

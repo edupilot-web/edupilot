@@ -8,7 +8,16 @@ import { SocialSignIn } from "@/components/auth/social-sign-in";
 import { SubmitButton } from "@/components/auth/submit-button";
 import { MailIcon, UserIcon } from "@/components/icons";
 
-export function SignupForm({ next, notice }: { next?: string; notice?: string }) {
+export function SignupForm({
+  next,
+  notice,
+  referralCode,
+}: {
+  next?: string;
+  notice?: string;
+  /** From `?ref=` on the invite link. Carried through the form untouched. */
+  referralCode?: string;
+}) {
   const [state, formAction, pending] = useActionState(signupAction, undefined);
 
   const [name, setName] = useState("");
@@ -21,6 +30,7 @@ export function SignupForm({ next, notice }: { next?: string; notice?: string })
     <div className="space-y-6">
       <form action={formAction} noValidate className="space-y-4">
         {next && <input type="hidden" name="next" value={next} />}
+        {referralCode && <input type="hidden" name="ref" value={referralCode} />}
 
         {/* A failed submit outranks a notice carried in from the URL. */}
         {(state?.message ?? notice) && <FormMessage>{state?.message ?? notice}</FormMessage>}

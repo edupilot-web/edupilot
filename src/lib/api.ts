@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import mongoose from "mongoose";
 import { getSession, type SessionPayload } from "@/lib/auth";
+import { sessionIsCurrent } from "@/lib/session-freshness";
 import type { Role } from "@/models/User";
 
 export function ok<T>(data: T, status = 200) {
@@ -22,6 +23,24 @@ export class HttpError extends Error {
 export async function requireAuth(): Promise<SessionPayload> {
   const session = await getSession();
   if (!session) throw new HttpError(401, "Authentication required");
+
+  /**
+   * A valid signature is not enough on its own.
+   *
+   * Sessions are stateless JWTs, so a password reset cannot delete them — it
+   * records a moment on the account instead, and every session older than that
+   * is refused here. Without this check a reset would leave an intruder's
+   * session working, which is the one thing a reset is supposed to stop.
+   *
+   * One indexed read on a field that is null for almost every account.
+   * `proxy.ts` deliberately does *not* do this: it runs before the database is
+   * reachable and is a cheap cookie check by design, with this as the
+   * authoritative gate behind it.
+   */
+  if (!(await sessionIsCurrent(session))) {
+    throw new HttpError(401, "Your session has ended. Please sign in again.");
+  }
+
   return session;
 }
 

@@ -1,51 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "@/components/brand";
+import { AudienceSwitch, type Audience } from "@/components/landing-sections";
 import {
   BellIcon,
   ChevronDownIcon,
-  CloseIcon,
   LogOutIcon,
-  MenuIcon,
-  SearchIcon,
 } from "@/components/icons";
 import { logoutAction } from "@/lib/auth-actions";
 
-type NavItem = {
-  label: string;
-  href: string;
-  children?: { label: string; href: string }[];
-};
-
 /**
- * The marketing navigation from the design. Only Home exists today — the rest
- * are the intended information architecture and 404 until those pages land.
+ * The header carries the **audience switch** rather than a nav.
+ *
+ * There are no marketing sub-pages to link to, and the previous version
+ * invented six that were all 404s. What a visitor actually needs to choose here
+ * is which half of the product they are: the page then shows that half and
+ * nothing else, so nobody scrolls past content addressed to somebody else.
  */
-const NAV: NavItem[] = [
-  { label: "Home", href: "/" },
-  {
-    label: "Explore",
-    href: "/explore",
-    children: [
-      { label: "Courses", href: "/explore/courses" },
-      { label: "Programs", href: "/explore/programs" },
-      { label: "Research areas", href: "/explore/research" },
-    ],
-  },
-  { label: "Resources", href: "/resources" },
-  { label: "Scholarships", href: "/scholarships" },
-  { label: "Mentorship", href: "/mentorship" },
-  { label: "Community", href: "/community" },
-  { label: "Events", href: "/events" },
-];
 
 export type HeaderUser = {
   name: string;
-  /** Unread notification count shown on the bell. */
-  notifications?: number;
+  /**
+   * Unread notifications, from the real service.
+   *
+   * Required rather than optional: the previous version defaulted to a
+   * hard-coded 3 when nobody supplied one, which is how a fake number survives
+   * a year of code review. A caller that does not know the count has to say
+   * `0`, which is at least honest.
+   */
+  notifications: number;
 };
 
 /** Closes a popover on outside click and on Escape. */
@@ -99,118 +84,58 @@ function Avatar({ name, className = "h-10 w-10" }: { name: string; className?: s
 const ICON_BUTTON =
   "grid h-10 w-10 place-items-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white";
 
-export function SiteHeader({ user }: { user: HeaderUser | null }) {
-  const pathname = usePathname();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [exploreOpen, setExploreOpen] = useState(false);
+export function SiteHeader({
+  user,
+  audience,
+}: {
+  user: HeaderUser | null;
+  audience: Audience;
+}) {
   const [accountOpen, setAccountOpen] = useState(false);
 
-  const exploreRef = useDismiss<HTMLDivElement>(exploreOpen, () => setExploreOpen(false));
   const accountRef = useDismiss<HTMLDivElement>(accountOpen, () => setAccountOpen(false));
 
   // Navigating should never leave a panel hanging open. Done on click rather
   // than in an effect keyed to the pathname, which would cascade renders.
-  const closeAll = () => {
-    setMenuOpen(false);
-    setExploreOpen(false);
-    setAccountOpen(false);
-  };
-
-  const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+  const closeAll = () => setAccountOpen(false);
 
   return (
     <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-slate-800 dark:bg-slate-900/95 dark:supports-[backdrop-filter]:bg-slate-900/80">
       <div className="mx-auto flex h-[76px] max-w-[1440px] items-center gap-3 px-5 lg:h-[92px] lg:px-10">
-        <button
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-expanded={menuOpen}
-          aria-controls="mobile-nav"
-          aria-label={menuOpen ? "Close menu" : "Open menu"}
-          className={`${ICON_BUTTON} lg:hidden`}
-        >
-          {menuOpen ? <CloseIcon className="h-6 w-6" /> : <MenuIcon className="h-6 w-6" />}
-        </button>
-
         <BrandLogo size="lg" className="mr-auto lg:mr-0" />
 
         {/* Desktop navigation */}
-        <nav aria-label="Main" className="mx-auto hidden items-center gap-1 lg:flex">
-          {NAV.map((item) =>
-            item.children ? (
-              <div key={item.label} ref={exploreRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setExploreOpen((v) => !v)}
-                  aria-expanded={exploreOpen}
-                  className={`flex items-center gap-1 rounded-lg px-3.5 py-2 text-[15px] font-medium transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 ${
-                    isActive(item.href)
-                      ? "text-blue-600 dark:text-blue-400"
-                      : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
-                  }`}
-                >
-                  {item.label}
-                  <ChevronDownIcon
-                    className={`h-4 w-4 transition-transform ${exploreOpen ? "rotate-180" : ""}`}
-                  />
-                </button>
-
-                {exploreOpen && (
-                  <div className="absolute left-0 top-full mt-2 w-52 overflow-hidden rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg shadow-slate-900/5 dark:border-slate-700 dark:bg-slate-800">
-                    {item.children.map((child) => (
-                      <Link
-                        key={child.href}
-                        href={child.href}
-                        onClick={closeAll}
-                        className="block px-4 py-2 text-[14px] text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/60 dark:hover:text-white"
-                      >
-                        {child.label}
-                      </Link>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={isActive(item.href) ? "page" : undefined}
-                className={`relative rounded-lg px-3.5 py-2 text-[15px] font-medium transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20 ${
-                  isActive(item.href)
-                    ? "text-blue-600 dark:text-blue-400"
-                    : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
-                }`}
-              >
-                {item.label}
-                {isActive(item.href) && (
-                  <span
-                    aria-hidden="true"
-                    // Sits flush with the header's bottom edge: the 92px bar
-                    // centres a ~38px nav item, leaving 27px below it.
-                    className="absolute -bottom-[27px] left-3.5 right-3.5 h-[3px] rounded-full bg-blue-600"
-                  />
-                )}
-              </Link>
-            )
-          )}
-        </nav>
+        <div className="mx-auto hidden lg:block">
+          <AudienceSwitch audience={audience} />
+        </div>
 
         {/* Right cluster */}
         <div className="flex items-center gap-1.5 lg:gap-2">
-          <button type="button" aria-label="Search" className={ICON_BUTTON}>
-            <SearchIcon className="h-[22px] w-[22px]" />
-          </button>
-
           {user && (
-            <button type="button" aria-label="Notifications" className={`relative ${ICON_BUTTON}`}>
+            /**
+             * A link, and a real count.
+             *
+             * This was a `<button>` with no handler showing a hard-coded 3 — a
+             * badge that told every signed-in visitor they had three of
+             * something, and did nothing when pressed. The count now comes from
+             * the notification service and the control goes where it says.
+             */
+            <Link
+              href="/notifications"
+              aria-label={
+                user.notifications
+                  ? `Notifications, ${user.notifications} unread`
+                  : "Notifications"
+              }
+              className={`relative ${ICON_BUTTON}`}
+            >
               <BellIcon className="h-[22px] w-[22px]" />
-              {!!user.notifications && (
+              {user.notifications > 0 && (
                 <span className="absolute right-1 top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-blue-600 px-1 text-[10px] font-bold text-white ring-2 ring-white dark:ring-slate-900">
-                  {user.notifications}
+                  {user.notifications > 9 ? "9+" : user.notifications}
                 </span>
               )}
-            </button>
+            </Link>
           )}
 
           {user ? (
@@ -267,80 +192,18 @@ export function SiteHeader({ user }: { user: HeaderUser | null }) {
             </Link>
           )}
 
+          {/* "Join Now" was shown to people who had already joined and were
+              signed in at the time. Somebody who is signed in wants one thing
+              from this page, which is to get back into the app. */}
           <Link
-            href="/signup"
+            href={user ? "/dashboard" : "/signup"}
             className="ml-1 hidden rounded-xl bg-blue-600 px-6 py-3 text-[15px] font-semibold text-white shadow-sm shadow-blue-600/30 transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/30 lg:block"
           >
-            Join Now
+            {user ? "Go to dashboard" : "Get started"}
           </Link>
         </div>
       </div>
 
-      {/* Mobile navigation */}
-      {menuOpen && (
-        <div
-          id="mobile-nav"
-          className="border-t border-slate-200 bg-white px-5 pb-6 pt-3 lg:hidden dark:border-slate-800 dark:bg-slate-900"
-        >
-          <nav aria-label="Mobile" className="flex flex-col">
-            {NAV.map((item) => (
-              <div key={item.label}>
-                <Link
-                  href={item.href}
-                  onClick={closeAll}
-                  aria-current={isActive(item.href) ? "page" : undefined}
-                  className={`block rounded-lg px-3 py-3 text-[16px] font-medium transition ${
-                    isActive(item.href)
-                      ? "bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400"
-                      : "text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
-                  }`}
-                >
-                  {item.label}
-                </Link>
-                {item.children?.map((child) => (
-                  <Link
-                    key={child.href}
-                    href={child.href}
-                    onClick={closeAll}
-                    className="block rounded-lg px-6 py-2.5 text-[15px] text-slate-500 transition hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-slate-800"
-                  >
-                    {child.label}
-                  </Link>
-                ))}
-              </div>
-            ))}
-          </nav>
-
-          <div className="mt-4 flex flex-col gap-2.5 border-t border-slate-200 pt-4 dark:border-slate-800">
-            {user ? (
-              <form action={logoutAction}>
-                <button
-                  type="submit"
-                  className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-5 py-3 text-[15px] font-medium text-slate-600 dark:border-slate-700 dark:text-slate-300"
-                >
-                  <LogOutIcon className="h-4 w-4" />
-                  Sign out
-                </button>
-              </form>
-            ) : (
-              <Link
-                href="/login"
-                onClick={closeAll}
-                className="rounded-xl border border-slate-200 px-5 py-3 text-center text-[15px] font-medium text-slate-600 dark:border-slate-700 dark:text-slate-300"
-              >
-                Sign in
-              </Link>
-            )}
-            <Link
-              href="/signup"
-              onClick={closeAll}
-              className="rounded-xl bg-blue-600 px-5 py-3 text-center text-[15px] font-semibold text-white shadow-sm shadow-blue-600/30"
-            >
-              Join Now
-            </Link>
-          </div>
-        </div>
-      )}
     </header>
   );
 }

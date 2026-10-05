@@ -126,6 +126,14 @@ export const ADMIN_NAV: AdminNavSection[] = [
         keywords: ["teacher", "staff", "faculty", "approve", "assign", "subject"],
       },
       {
+        label: "Teacher access",
+        href: "/admin/teachers/access",
+        permissions: ["teacher.view"],
+        blurb: "Who may create a teacher account against your college, and who has been invited.",
+        built: true,
+        keywords: ["invite", "invitation", "domain", "signup", "policy", "access", "teacher"],
+      },
+      {
         label: "Courses / Programs",
         href: "/admin/programs",
         permissions: ["academic.view"],
@@ -256,6 +264,22 @@ export const ADMIN_NAV: AdminNavSection[] = [
       { label: "Campaigns", href: "/admin/notifications/campaigns", permissions: ["notification.view"], blurb: "Scheduled and sent broadcasts." },
       { label: "History", href: "/admin/notifications/history", permissions: ["notification.view"], blurb: "Every message sent, and what happened to it." },
       { label: "Failed", href: "/admin/notifications/failed", permissions: ["notification.view"], blurb: "Deliveries that bounced or errored." },
+    ],
+  },
+  {
+    key: "support",
+    heading: "Service Desk",
+    icon: "chat",
+    items: [
+      {
+        label: "Requests",
+        href: "/admin/service-requests",
+        permissions: ["service_request.view"],
+        blurb: "Problems students have reported with EduPilot: accounts, payments, curriculum, the AI tutor.",
+        built: true,
+        matchPrefix: true,
+        keywords: ["service", "request", "ticket", "help", "support", "issue", "bug", "complaint", "problem"],
+      },
     ],
   },
   {

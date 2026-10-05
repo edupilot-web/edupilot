@@ -151,6 +151,16 @@ export const PERMISSION_MODULES: PermissionModule[] = [
     ],
   },
   {
+    key: "service_request",
+    label: "Service Requests",
+    blurb: "The campus help desk: documents, hostel, IT and academic requests students raise.",
+    actions: [
+      { key: "view", label: "View", description: "See the request queue and each request's history" },
+      { key: "handle", label: "Handle", description: "Assign, reply, change status and resolve requests" },
+      { key: "export", label: "Export", description: "Download the queue for reporting" },
+    ],
+  },
+  {
     key: "payment",
     label: "Payments & Wallets",
     blurb: "Student wallets, the transaction ledger and refunds.",
@@ -302,6 +312,7 @@ export const ROLE_PRESETS: RolePreset[] = [
        * Super Admin until somebody asks for a finance role.
        */
       ...moduleActions("payment", ["view", "refund", "export"]),
+      ...moduleActions("service_request", ["view", "handle", "export"]),
     ],
     system: true,
   },
@@ -316,6 +327,14 @@ export const ROLE_PRESETS: RolePreset[] = [
       ...moduleActions("teacher", ["view", "approve", "assign", "view_content"]),
       ...moduleActions("geography", ["view", "edit"]),
       "student.view",
+      /**
+       * The desk is run locally.
+       *
+       * Every query in the module is already scoped to the administrator's own
+       * college, so an institution admin sees their campus queue and nobody
+       * else's — which is what makes this the right role to own it.
+       */
+      ...moduleActions("service_request", ["view", "handle", "export"]),
       "analytics.view",
       "audit.view",
       "system.view",
@@ -413,6 +432,7 @@ export const ROLE_PRESETS: RolePreset[] = [
       "topic_content.view",
       "teacher.view",
       "payment.view",
+      "service_request.view",
       "analytics.view",
       "system.view",
     ],

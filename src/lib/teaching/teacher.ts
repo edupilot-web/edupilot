@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { Types } from "mongoose";
 import { getSession } from "@/lib/auth";
+import { sessionIsFresh } from "@/lib/password-reset";
 import { connectDB } from "@/lib/db";
 import { HttpError } from "@/lib/api";
 import { CurriculumSubject } from "@/models/Curriculum";
@@ -71,8 +72,14 @@ export const getCurrentTeacher = cache(async (): Promise<TeacherContext | null> 
 
   await connectDB();
 
-  const user = await User.findById(session.sub).select("name email role emailVerified").lean();
+  const user = await User.findById(session.sub)
+    .select("name email role emailVerified sessionsValidFrom")
+    .lean();
   if (!user || user.role !== "teacher") return null;
+
+  // Free here: the document is already loaded. A password reset revokes every
+  // session, and a teacher's is no exception.
+  if (!sessionIsFresh(session.issuedAt, user.sessionsValidFrom)) return null;
 
   const profile = await TeacherProfile.findOne({ userId: session.sub }).lean();
   if (!profile) return null;

@@ -13,6 +13,7 @@ import {
   type ResolvedStudentContext,
 } from "@/lib/onboarding/academic-context";
 import { DEGREES, type Degree } from "@/lib/user-fields";
+import { qualifyReferral } from "@/lib/referrals/service";
 
 /**
  * Writing the academic profile (spec §26, §30, §33, §34).
@@ -339,6 +340,27 @@ export async function saveAcademicSelection(
   );
 
   await recordSemester(userId, profile?._id, context, { confirmed: !options.partial });
+
+  /**
+   * A finished profile is what a referral is paid for.
+   *
+   * Here rather than at signup because an account is free to create and a
+   * completed academic profile at a real college is not — paying on signup is
+   * paying for disposable mailboxes. This is also the moment the platform
+   * actually got what it wanted, which is the right thing to reward.
+   *
+   * Safe to call on every save: a referral already settled short-circuits, and
+   * the wallet's idempotency keys would refuse a second credit even if it did
+   * not. It never throws into this function, because a bonus that could not
+   * land must not stop a student's profile being written.
+   */
+  if (complete) {
+    try {
+      await qualifyReferral(userId);
+    } catch (err) {
+      console.error("[onboarding] referral qualification failed:", err);
+    }
+  }
 
   return { ok: true, context, completed: complete, nextStep: nextStepFor(context, personalComplete) };
 }

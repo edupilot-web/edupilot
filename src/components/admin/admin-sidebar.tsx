@@ -52,6 +52,7 @@ export function AdminSidebar({
   })).filter((section) => section.items.length > 0);
 
   const activeKey = activeSectionKey(sections, pathname);
+  const activeHref = activeItemHref(sections, pathname);
 
   /**
    * Which section is open is *derived*, not synchronised.
@@ -112,7 +113,7 @@ export function AdminSidebar({
             <Section
               key={section.key}
               section={section}
-              pathname={pathname}
+              activeHref={activeHref}
               collapsed={collapsed}
               expanded={openKey === section.key}
               holdsCurrentPage={activeKey === section.key}
@@ -163,8 +164,7 @@ function activeSectionKey(sections: AdminNavSection[], pathname: string): string
   for (const section of sections) {
     for (const item of section.items) {
       const href = item.href.split("?")[0];
-      const matches = href === pathname || (item.matchPrefix && pathname.startsWith(`${href}/`));
-      if (matches && href.length > bestLength) {
+      if (itemMatches(item, href, pathname) && href.length > bestLength) {
         bestKey = section.key;
         bestLength = href.length;
       }
@@ -174,9 +174,43 @@ function activeSectionKey(sections: AdminNavSection[], pathname: string): string
   return bestKey;
 }
 
+/**
+ * The single entry the current path belongs to.
+ *
+ * Longest match wins, because `matchPrefix` entries overlap their own children:
+ * “Teachers” matches every `/admin/teachers/*` path, so on
+ * `/admin/teachers/access` both it and “Teacher access” would otherwise be
+ * highlighted at once, and `aria-current="page"` would be on two links.
+ *
+ * `activeSectionKey` has always resolved its own ambiguity this way. This is
+ * the same rule applied one level down, so a section and the item inside it
+ * cannot disagree about where the user is.
+ */
+function activeItemHref(sections: AdminNavSection[], pathname: string): string | null {
+  let best: string | null = null;
+
+  for (const section of sections) {
+    for (const item of section.items) {
+      const href = item.href.split("?")[0];
+      if (!itemMatches(item, href, pathname)) continue;
+      if (best === null || href.length > best.length) best = href;
+    }
+  }
+
+  return best;
+}
+
+function itemMatches(
+  item: { matchPrefix?: boolean },
+  href: string,
+  pathname: string
+): boolean {
+  return href === pathname || (item.matchPrefix === true && pathname.startsWith(`${href}/`));
+}
+
 function Section({
   section,
-  pathname,
+  activeHref,
   collapsed,
   expanded,
   holdsCurrentPage,
@@ -184,7 +218,8 @@ function Section({
   onNavigate,
 }: {
   section: AdminNavSection;
-  pathname: string;
+  /** Resolved once for the whole rail, so only one entry can be current. */
+  activeHref: string | null;
   collapsed: boolean;
   expanded: boolean;
   /** The current page lives in here — worth marking even while shut. */
@@ -263,9 +298,7 @@ function Section({
             const href = item.href.split("?")[0];
             // A querystring entry ("Pending Verification") is active only on an
             // exact match, or every one of them would light up on the base path.
-            const active = item.href.includes("?")
-              ? false
-              : href === pathname || (item.matchPrefix && pathname.startsWith(`${href}/`));
+            const active = item.href.includes("?") ? false : href === activeHref;
 
             return (
               <li key={item.href}>

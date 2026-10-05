@@ -6,6 +6,7 @@ import { loginFormSchema, signupFormSchema } from "@/lib/validation";
 import { authenticate, createAccount, type UserDocument } from "@/lib/accounts";
 import { clearSessionCookie, startSession } from "@/lib/auth";
 import { destinationFor, VERIFY_EMAIL_PATH, withNext } from "@/lib/auth-routing";
+import { recordSignup } from "@/lib/referrals/service";
 import { sendVerification } from "@/lib/email-verification";
 import { isProfileCompleted } from "@/lib/student-profile";
 import { needsEmailVerification } from "@/models/User";
@@ -124,6 +125,23 @@ export async function signupAction(
       { sub: user._id.toString(), email: user.email, role: user.role },
       { remember: true }
     );
+
+    /**
+     * Attribute the referral, if the form carried a code.
+     *
+     * Records who invited whom and pays nothing — the reward lands when this
+     * student finishes onboarding, because an account is free to create and a
+     * completed profile at a real college is not.
+     *
+     * `recordSignup` never throws. A referral that cannot be attributed must
+     * not stop an account being created: a student who cannot register because
+     * somebody mistyped a code is a far worse outcome than an unattributed
+     * invite.
+     */
+    const referralCode = text(formData, "ref");
+    if (referralCode) {
+      await recordSignup(user._id.toString(), referralCode);
+    }
 
     // Not rate-limited: this is the first send, and spending the user's
     // allowance before they have asked for anything would be perverse. A

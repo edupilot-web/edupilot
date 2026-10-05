@@ -11,7 +11,8 @@
 
 | Piece | File | Kind |
 | --- | --- | --- |
-| Page | [login/page.tsx](../../../src/app/(auth)/login/page.tsx) | server — reads `?next=`, redirects signed-in visitors, supplies panel copy and the three feature bullets |
+| Page | [login/page.tsx](../../../src/app/(auth)/login/page.tsx) | server — reads `?next=`, redirects signed-in visitors, supplies the panel copy |
+| Panel bullets | `SIGN_IN_FEATURES` in [panel-features.tsx](../../../src/components/auth/panel-features.tsx) | shared with the other three auth screens |
 | Shell | [auth-shell.tsx](../../../src/components/auth/auth-shell.tsx) | server — two-column layout, brand lockup, dot grid and wave, mobile header |
 | Form | [login-form.tsx](../../../src/components/auth/login-form.tsx) | **client** — `useActionState`, field state, pending button |
 | Fields | [fields.tsx](../../../src/components/auth/fields.tsx) | labelled input, password reveal toggle, checkbox, per-field errors, form banner |
@@ -80,5 +81,11 @@ unticked → 7-day token in a cookie the browser drops on close. See
 
 - Google / Microsoft / Apple: no OAuth client, redirect URI or callback exists. Each button
   shows "… sign-in is not connected yet. Please use your email and password."
-- `Forgot password?` → [forgot-password.md](forgot-password.md), a placeholder.
 - No rate limiting or lockout, on this form or the API. The credential check is brute-forceable.
+
+## One sign-in for both roles
+
+A teacher signing in here is accepted — the account, the password hash and the session cookie are the
+same — and `destinationFor` sends them to `/teacher/dashboard` rather than student onboarding, which
+they would never be able to finish. `/teacher/login` still exists because every teacher gate redirects
+there, `proxy.ts` included; it renders the same shell and the same fields, with the teacher panel copy.

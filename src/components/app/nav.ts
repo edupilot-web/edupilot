@@ -138,7 +138,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Service Requests",
         href: APP_ROUTES.serviceRequests,
         icon: FileTextIcon,
-        blurb: "Raise a request for documents, hostel or IT support and follow its progress.",
+        blurb: "Report a problem with EduPilot and follow what happens to it.",
       },
       {
         label: "My Profile",

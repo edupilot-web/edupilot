@@ -1,5 +1,6 @@
 import { cache } from "react";
 import { getSession } from "@/lib/auth";
+import { sessionIsFresh } from "@/lib/password-reset";
 import { connectDB } from "@/lib/db";
 import { getStudentProfile, type StudentProfileView } from "@/lib/student-profile";
 import { User, needsEmailVerification } from "@/models/User";
@@ -41,10 +42,20 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
 
   await connectDB();
   const user = await User.findById(session.sub)
-    .select("name email role authProvider emailVerified phone city avatarUrl googleId")
+    .select("name email role authProvider emailVerified phone city avatarUrl googleId sessionsValidFrom")
     .lean();
   // The cookie outlived the account.
   if (!user) return null;
+
+  /**
+   * A session older than the account's revocation mark is not a session.
+   *
+   * Free here — the document is already loaded — and necessary, because a
+   * password reset cannot delete a stateless JWT. Returning null rather than
+   * throwing keeps every existing caller correct: they all already handle "no
+   * user", and a reset should look exactly like being signed out.
+   */
+  if (!sessionIsFresh(session.issuedAt, user.sessionsValidFrom)) return null;
 
   const profile = await getStudentProfile(session.sub);
 

@@ -5,7 +5,7 @@ import { startSession } from "@/lib/auth";
 import { connectDB } from "@/lib/db";
 import { sendVerification } from "@/lib/email-verification";
 import { consumeRateLimits, formatRetryAfter } from "@/lib/rate-limit";
-import { teacherAutoApproveEnabled } from "@/lib/teaching/fields";
+import { checkEligibility, consumeInvite } from "@/lib/teaching/invites";
 import { teacherSignupSchema } from "@/lib/teaching/validation";
 import { Department } from "@/models/AcademicStructure";
 import { College } from "@/models/College";
@@ -86,6 +86,29 @@ export async function POST(req: Request) {
       return fail("Choose your college from the list", 422, { field: "collegeId" });
     }
 
+    /**
+     * **The gate.** May this address claim a teacher account here?
+     *
+     * Checked after the college exists and before the account is created, so a
+     * refusal leaves nothing behind. The college decides: invite-only by
+     * default, optionally anyone on its own email domain, optionally anyone.
+     *
+     * This is the check that used to be missing. Anybody could pick any college
+     * from the directory and land in its approval queue, which across a few
+     * hundred institutions is a way to bury every queue on the platform — and
+     * left the administrator approving with nothing to check an identity
+     * against.
+     */
+    const eligibility = await checkEligibility({
+      collegeId: input.collegeId,
+      email: input.email,
+      inviteToken: input.inviteToken ?? null,
+    });
+
+    if (!eligibility.ok) {
+      return fail(eligibility.message, 403, { code: eligibility.code, field: "email" });
+    }
+
     // A department, if given, must belong to that college — otherwise a teacher
     // could file themselves under another institution's department.
     let department: { _id: Types.ObjectId; name: string } | null = null;
@@ -101,6 +124,8 @@ export async function POST(req: Request) {
         return fail("Choose a department from your college", 422, { field: "departmentId" });
       }
     }
+
+    const autoApprove = eligibility.policy.autoApprove;
 
     const account = await createAccount({
       name: input.name,
@@ -134,9 +159,14 @@ export async function POST(req: Request) {
          * self-declared teacher would let anyone with an email address publish
          * to a college's students — the one failure in this module with no
          * undo.
+         *
+         * The decision is now the **college's**, read from its own policy
+         * rather than from a platform-wide environment flag: "trust every
+         * teacher at every institution" is not something a deployment with
+         * three hundred colleges should be able to say in one variable.
          */
-        status: teacherAutoApproveEnabled() ? "active" : "pending",
-        ...(teacherAutoApproveEnabled() ? { approvedAt: new Date() } : {}),
+        status: autoApprove ? "active" : "pending",
+        ...(autoApprove ? { approvedAt: new Date() } : {}),
       });
     } catch (err) {
       /**
@@ -146,6 +176,17 @@ export async function POST(req: Request) {
        */
       await user.deleteOne().catch(() => undefined);
       throw err;
+    }
+
+    /**
+     * Spend the invitation, once the account it was for exists.
+     *
+     * After the profile rather than before, so a failure part-way through
+     * leaves the invitation usable — somebody whose sign-up errored should be
+     * able to click the same link again rather than having to ask for another.
+     */
+    if (eligibility.inviteId) {
+      await consumeInvite(eligibility.inviteId, user._id.toString());
     }
 
     await startSession({
@@ -173,7 +214,7 @@ export async function POST(req: Request) {
           name: user.name,
           email: user.email,
           collegeName: college.name,
-          status: teacherAutoApproveEnabled() ? "active" : "pending",
+          status: autoApprove ? "active" : "pending",
         },
         emailVerificationSent: delivery.status === "sent",
         next: "/verify-email",

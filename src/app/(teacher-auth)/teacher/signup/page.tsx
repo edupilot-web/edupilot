@@ -1,13 +1,21 @@
-import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { TeacherSignupForm } from "@/components/teacher/teacher-auth-forms";
-import { getCurrentTeacher } from "@/lib/teaching/teacher";
 
-export const metadata: Metadata = { title: "Create a teacher account · EduPilot" };
+/**
+ * Teacher sign-up now lives on `/signup?role=teacher`.
+ *
+ * Kept as a redirect rather than deleted: this path is in the landing page's
+ * history, in the docs, and quite possibly in an email somebody sent a
+ * colleague. A 404 would tell them the product had removed teacher accounts.
+ *
+ * `?invite=` is carried through, because an invitation link issued before the
+ * move points here.
+ */
+export default async function Page(props: PageProps<"/teacher/signup">) {
+  const { invite, next } = await props.searchParams;
 
-export default async function Page() {
-  const teacher = await getCurrentTeacher();
-  if (teacher) redirect("/teacher/dashboard");
+  const params = new URLSearchParams({ role: "teacher" });
+  if (typeof invite === "string") params.set("invite", invite);
+  if (typeof next === "string") params.set("next", next);
 
-  return <TeacherSignupForm />;
+  redirect(`/signup?${params}`);
 }

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { BrandMark } from "@/components/brand";
 import {
+  BellIcon,
   CheckSquareIcon,
   ClipboardIcon,
   CloseIcon,
@@ -38,6 +39,7 @@ const NAV = [
   { href: TEACHER_ROUTES.dashboard, label: "Dashboard", icon: DashboardIcon },
   { href: TEACHER_ROUTES.assignments, label: "Assignments", icon: ClipboardIcon },
   { href: TEACHER_ROUTES.notes, label: "Notes", icon: FileTextIcon },
+  { href: TEACHER_ROUTES.notifications, label: "Notifications", icon: BellIcon },
   { href: TEACHER_ROUTES.students, label: "Students", icon: UsersIcon },
   { href: TEACHER_ROUTES.profile, label: "Profile", icon: UserIcon },
 ];
@@ -48,6 +50,7 @@ export function TeacherShell({
   status,
   canPublish,
   subjectCount,
+  unread,
   children,
 }: {
   name: string;
@@ -55,6 +58,8 @@ export function TeacherShell({
   status: TeacherStatus;
   canPublish: boolean;
   subjectCount: number;
+  /** Unread notifications, capped at 100 by the service. */
+  unread: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -118,7 +123,19 @@ export function TeacherShell({
                     }`}
                   >
                     <Icon className="h-[17px] w-[17px] shrink-0" />
-                    {item.label}
+                    <span className="flex-1">{item.label}</span>
+                    {item.href === TEACHER_ROUTES.notifications && unread > 0 && (
+                      /* Capped at 100 by the service, so the badge shows "99+"
+                         past that rather than counting rows nobody reads. */
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                          active ? "bg-white/20 text-white" : "bg-blue-600 text-white"
+                        }`}
+                        aria-label={`${unread} unread`}
+                      >
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    )}
                   </Link>
                 </li>
               );

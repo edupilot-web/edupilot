@@ -100,6 +100,96 @@ export function teacherAutoApproveEnabled(): boolean {
   return process.env.TEACHER_AUTO_APPROVE?.trim() === "true";
 }
 
+// ── Who may become a teacher (per college) ─────────────────────────
+
+/**
+ * How a college lets somebody claim a teacher account.
+ *
+ * The first version of teacher signup let **anyone pick any college** from the
+ * directory and land in its approval queue. At one institution that is a
+ * nuisance; across a few hundred it is a way to bury every queue on the
+ * platform, and the administrator approving has nothing to check an identity
+ * against — a name and an email address they have never seen.
+ *
+ * So the question "may this person become a teacher here" is now the college's
+ * to answer, and each mode answers it differently:
+ */
+export const TEACHER_SIGNUP_MODES = [
+  /**
+   * Somebody at the college has to invite the address first. The strongest, and
+   * the default — a college that has configured nothing should not be claimable.
+   */
+  "invite_only",
+  /**
+   * Anyone with an email on the college's own domain may register, and still
+   * lands pending. The setting that scales: an institution with a thousand
+   * staff cannot invite them one at a time, and control of an `@college.ac.in`
+   * mailbox is already a claim the college itself issued.
+   */
+  "domain",
+  /**
+   * Anyone may register, pending approval. What the platform used to do
+   * everywhere. Kept because a small college running its own approvals may
+   * genuinely want it — but it is now a decision somebody makes, not the
+   * default nobody chose.
+   */
+  "open",
+] as const;
+export type TeacherSignupMode = (typeof TEACHER_SIGNUP_MODES)[number];
+
+export const TEACHER_SIGNUP_MODE_LABELS: Record<TeacherSignupMode, string> = {
+  invite_only: "Invite only",
+  domain: "Anyone with a college email address",
+  open: "Anyone (approved by an administrator)",
+};
+
+export const TEACHER_SIGNUP_MODE_BLURBS: Record<TeacherSignupMode, string> = {
+  invite_only: "Nobody can register as a teacher here until you invite their address.",
+  domain: "Staff with an address on one of your domains can register themselves. You still approve them.",
+  open: "Anyone can register against this college. You approve every one by hand.",
+};
+
+/** A college with no policy configured is invite-only, not open. */
+export const DEFAULT_TEACHER_SIGNUP_MODE: TeacherSignupMode = "invite_only";
+
+/**
+ * Whether `email` belongs to one of `domains`.
+ *
+ * Sub-domains count: a college that allows `vrsec.ac.in` means
+ * `cse.vrsec.ac.in` too, because that is how institutional mail is usually
+ * arranged and a teacher does not choose which sub-domain they were given.
+ *
+ * The boundary check is what stops `notvrsec.ac.in` matching `vrsec.ac.in` — a
+ * bare `endsWith` would accept it, and an attacker can register that domain.
+ */
+export function emailMatchesDomains(email: string, domains: readonly string[]): boolean {
+  const at = email.lastIndexOf("@");
+  if (at < 0) return false;
+
+  const host = email.slice(at + 1).trim().toLowerCase();
+  if (!host) return false;
+
+  return domains.some((raw) => {
+    const domain = normaliseDomain(raw);
+    if (!domain) return false;
+    return host === domain || host.endsWith(`.${domain}`);
+  });
+}
+
+/** Accepts what an administrator plausibly types: `@x.ac.in`, `https://x.ac.in/`. */
+export function normaliseDomain(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^@/, "")
+    .replace(/\/.*$/, "")
+    .replace(/^www\./, "");
+}
+
+/** How long an invitation stays usable. */
+export const INVITE_TTL_DAYS = 14;
+
 // ── Assignments (§16) ─────────────────────────────────────────────────────
 
 export const ASSIGNMENT_STATUSES = [

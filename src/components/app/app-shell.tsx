@@ -9,9 +9,14 @@ import { AlertIcon, CloseIcon } from "@/components/icons";
  * Chrome for every signed-in page: the navigation rail, the top bar, and one
  * shared notice slot.
  *
- * Several controls in the design — search, notifications, Upgrade to Pro — have
- * no backend behind them. Rather than let them look broken or pretend to work,
- * they route through `notice` and say so plainly.
+ * **Search** is the last control in the design with nothing behind it. Rather
+ * than let it look broken or pretend to work, it routes through `notice` and
+ * says so plainly.
+ *
+ * Notifications used to be in that list and is now a real link with a real
+ * count. "Upgrade to Pro" was too, and has been removed rather than wired: it
+ * advertised premium courses and career tools that do not exist, which is a
+ * promise the notice slot cannot soften.
  */
 export function AppShell({
   name,
@@ -30,7 +35,6 @@ export function AppShell({
       <AppSidebar
         open={navOpen}
         onClose={() => setNavOpen(false)}
-        onUpgrade={() => setNotice("Upgrade to Pro")}
       />
 
       <div className="flex min-h-screen flex-col lg:pl-[264px]">

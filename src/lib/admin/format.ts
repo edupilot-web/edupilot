@@ -82,6 +82,39 @@ export function formatRelative(value: Date | string | null | undefined): string 
   return DATE.format(date);
 }
 
+/**
+ * The same thing for a date that has not happened yet.
+ *
+ * `formatRelative` only counts backwards, so a deadline rendered through it
+ * reads "-14 days ago". Everything the admin UI showed was in the past until
+ * invitations, which are the first rows whose interesting date is a future one.
+ *
+ * It falls back to `formatRelative` once the moment has passed, because a
+ * deadline that is now behind us is an ordinary past date and reading "in -1
+ * days" would be the same bug the other way round.
+ */
+export function formatUntil(value: Date | string | null | undefined): string {
+  if (!value) return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+
+  const seconds = Math.round((date.getTime() - Date.now()) / 1000);
+  if (seconds <= 0) return formatRelative(date);
+  if (seconds < 60) return "in under a minute";
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `in ${minutes} minutes`;
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+
+  const days = Math.round(hours / 24);
+  if (days === 1) return "tomorrow";
+  if (days < 30) return `in ${days} days`;
+
+  return DATE.format(date);
+}
+
 /** "1.2 MB". Binary units, because that is what a file browser reports. */
 export function formatBytes(bytes: number | null | undefined): string {
   if (!bytes) return "—";

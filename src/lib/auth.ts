@@ -21,6 +21,14 @@ export type SessionPayload = {
   sub: string;
   email: string;
   role: Role;
+  /**
+   * When the token was signed, in whole seconds.
+   *
+   * Carried so a gate can refuse a session older than the account's
+   * `sessionsValidFrom` — the only way to revoke a stateless JWT, and what makes
+   * "resetting my password signs me out everywhere" true rather than a claim.
+   */
+  issuedAt?: number;
 };
 
 export async function signSession(
@@ -43,6 +51,7 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
       sub: payload.sub,
       email: payload.email as string,
       role: payload.role as Role,
+      issuedAt: typeof payload.iat === "number" ? payload.iat : undefined,
     };
   } catch {
     return null;

@@ -3,8 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { BrandMark } from "@/components/brand";
-import { PresentIcon } from "@/components/icons";
+import {
+  FormMessage,
+  INPUT_PLAIN,
+  LABEL,
+  PasswordField,
+  TextField,
+} from "@/components/auth/fields";
+import { SubmitButton } from "@/components/auth/submit-button";
+import { GraduationCapIcon, LockIcon, MailIcon, UserIcon } from "@/components/icons";
 
 /**
  * Teacher sign-in and sign-up (§3, §6).
@@ -13,6 +20,12 @@ import { PresentIcon } from "@/components/icons";
  * it — `/api/teacher/login` compares the same bcrypt hash and mints the same
  * cookie. §6 asks for a separate UX, not a second auth system, and a second one
  * would be a second place to get password handling and session expiry right.
+ *
+ * The same reasoning applies to the chrome. These forms used to render their
+ * own page shell and their own inputs, which is how they ended up light-only,
+ * without a show-password toggle and a size apart from the student forms. They
+ * are now plain forms: the page supplies `AuthShell`, and every field comes
+ * from `components/auth/fields.tsx`.
  *
  * The college picker is the piece that matters (§3). It searches the approved
  * directory and submits an **id**: free text would put two spellings of one
@@ -60,74 +73,147 @@ export function TeacherLoginForm({ next }: { next?: string }) {
   }
 
   return (
-    <AuthShell title="Sign in" subtitle="EduPilot for teachers">
-      <form onSubmit={submit} className="space-y-3.5">
-        <Field
-          id="email"
-          label="Email"
+    <>
+      <form onSubmit={submit} noValidate className="space-y-4">
+        {error && <FormMessage>{error}</FormMessage>}
+
+        <TextField
+          label="Email address"
+          name="email"
           type="email"
+          placeholder="Enter your email"
           autoComplete="email"
+          icon={<MailIcon />}
           value={email}
           onChange={setEmail}
-          required
         />
-        <Field
-          id="password"
+
+        <PasswordField
           label="Password"
-          type="password"
+          name="password"
+          placeholder="Enter your password"
           autoComplete="current-password"
+          icon={<LockIcon />}
           value={password}
           onChange={setPassword}
-          required
-        />
-
-        {error && (
-          <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[13px] text-rose-700">
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-lg bg-blue-600 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
         >
-          {busy ? "Signing in..." : "Sign in"}
-        </button>
+          <div className="mt-1.5 text-right">
+            <Link
+              href="/forgot-password"
+              className="text-[12.5px] font-medium text-blue-600 transition hover:text-blue-700 hover:underline dark:text-blue-400"
+            >
+              Forgot password?
+            </Link>
+          </div>
+        </PasswordField>
+
+        <div className="pt-1">
+          <SubmitButton pending={busy}>Sign in</SubmitButton>
+        </div>
       </form>
 
-      <p className="mt-5 text-center text-[13.5px] text-slate-500">
+      <p className="mt-6 text-center text-[13px] text-slate-500 dark:text-slate-400">
         New here?{" "}
-        <Link href="/teacher/signup" className="font-semibold text-blue-600 hover:underline">
+        <Link
+          href="/signup?role=teacher"
+          className="font-semibold text-blue-600 transition hover:text-blue-700 hover:underline dark:text-blue-400"
+        >
           Create a teacher account
         </Link>
       </p>
-      <p className="mt-2 text-center text-[13px] text-slate-400">
+      <p className="mt-2 text-center text-[13px] text-slate-400 dark:text-slate-500">
         Are you a student?{" "}
         <Link href="/login" className="hover:underline">
           Sign in here
         </Link>
       </p>
-    </AuthShell>
+    </>
   );
 }
 
-type College = { id: string; name: string; city: string | null; state: string | null };
+/**
+ * Shaped like `CollegeSuggestion` from `lib/colleges.ts`, which is what the
+ * search endpoint returns. It used to be read as `city` and `stateName`, fields
+ * that endpoint has never sent — so the second line under each result was
+ * always blank and two colleges of the same name were indistinguishable.
+ */
+type College = { id: string; name: string; location: string | null };
 
-export function TeacherSignupForm() {
+/**
+ * An invitation, already verified on the server.
+ *
+ * When present the address and the college are **fixed**: the invitation was
+ * issued to that mailbox at that institution, and letting either be edited
+ * would turn a link somebody was given into a way to register as anybody,
+ * anywhere. The server re-checks both on submit regardless.
+ */
+export type ResolvedInvite = {
+  token: string;
+  email: string;
+  collegeId: string;
+  collegeName: string;
+  designation: string | null;
+};
+
+type CollegePolicy = {
+  mode: string;
+  allowedDomains: string[];
+  blurb: string;
+  selfServe: boolean;
+};
+
+export function TeacherSignupForm({ invite = null }: { invite?: ResolvedInvite | null }) {
   const router = useRouter();
 
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(invite?.email ?? "");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [employeeId, setEmployeeId] = useState("");
-  const [designation, setDesignation] = useState("");
+  const [designation, setDesignation] = useState(invite?.designation ?? "");
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(invite?.collegeName ?? "");
   const [results, setResults] = useState<College[]>([]);
-  const [college, setCollege] = useState<College | null>(null);
+  const [college, setCollege] = useState<College | null>(
+    invite ? { id: invite.collegeId, name: invite.collegeName, location: null } : null
+  );
   const [searching, setSearching] = useState(false);
+
+  /**
+   * What the chosen college requires, fetched when one is picked.
+   *
+   * Only changes what the screen *says*. `checkEligibility` decides on submit,
+   * so a stale or skipped policy cannot let anybody through — it would only
+   * mean being refused after filling the form instead of before.
+   */
+  const [policy, setPolicy] = useState<CollegePolicy | null>(null);
+
+  useEffect(() => {
+    // An invitation outranks the policy: it works whatever mode the college is
+    // in, so there is nothing to fetch.
+    if (invite || !college) return;
+
+    let live = true;
+    fetch(`/api/teacher/signup/policy?collegeId=${encodeURIComponent(college.id)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => {
+        if (live && payload?.data) setPolicy(payload.data as CollegePolicy);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      live = false;
+    };
+  }, [college, invite]);
+
+  /**
+   * Derived, not cleared in the effect.
+   *
+   * Clearing state from an effect body is a second render for something the
+   * render already knows — and the lint rule that catches it is right: a stale
+   * policy would otherwise flash against a newly chosen college.
+   */
+  const visiblePolicy = invite || !college ? null : policy;
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -161,15 +247,14 @@ export function TeacherSignupForm() {
       try {
         const response = await fetch(`/api/colleges/search?q=${encodeURIComponent(query.trim())}`);
         const payload = (await response.json()) as {
-          data?: { colleges?: { _id?: string; id?: string; name: string; city?: string | null; stateName?: string | null }[] };
+          data?: { colleges?: { id: string; name: string; location?: string | null }[] };
         };
 
         setResults(
           (payload.data?.colleges ?? []).slice(0, 8).map((entry) => ({
-            id: String(entry.id ?? entry._id),
+            id: String(entry.id),
             name: entry.name,
-            city: entry.city ?? null,
-            state: entry.stateName ?? null,
+            location: entry.location ?? null,
           }))
         );
       } catch {
@@ -208,6 +293,7 @@ export function TeacherSignupForm() {
           collegeId: college.id,
           employeeId: employeeId || null,
           designation: designation || null,
+          inviteToken: invite?.token ?? null,
         }),
       });
 
@@ -230,19 +316,47 @@ export function TeacherSignupForm() {
   }
 
   return (
-    <AuthShell title="Create a teacher account" subtitle="EduPilot for teachers">
-      <form onSubmit={submit} className="space-y-3.5">
-        <Field id="name" label="Full name" value={name} onChange={setName} required autoComplete="name" />
-        <Field id="email" label="Email" type="email" value={email} onChange={setEmail} required autoComplete="email" />
+    <>
+      <form onSubmit={submit} noValidate className="space-y-4">
+        <TextField
+          label="Full name"
+          name="name"
+          placeholder="Enter your full name"
+          autoComplete="name"
+          icon={<UserIcon />}
+          value={name}
+          onChange={setName}
+        />
+        {/**
+          * Fixed when an invitation was followed.
+          *
+          * The invitation was issued to **that mailbox**; letting the address be
+          * edited would turn a link somebody was handed into a way to register
+          * as anybody. The server refuses a mismatch regardless — this is so the
+          * form does not invite the attempt.
+          */}
+        <TextField
+          label="Email address"
+          name="email"
+          type="email"
+          placeholder="Enter your email"
+          autoComplete="email"
+          icon={<MailIcon />}
+          value={email}
+          onChange={setEmail}
+          readOnly={invite !== null}
+          hint={invite ? "Set by your invitation." : undefined}
+        />
 
         <div>
-          <label htmlFor="college" className="block text-[12.5px] font-semibold text-slate-600">
+          <label htmlFor="college" className={LABEL}>
             College
           </label>
 
           {college ? (
-            <div className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-              <span className="min-w-0 flex-1 truncate text-[14px] text-slate-800">
+            <div className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-3.5 pr-3 dark:border-slate-700 dark:bg-slate-800/60">
+              <GraduationCapIcon className="h-[18px] w-[18px] shrink-0 text-slate-400" />
+              <span className="min-w-0 flex-1 truncate text-[15px] text-slate-700 dark:text-slate-200">
                 {college.name}
               </span>
               <button
@@ -251,26 +365,31 @@ export function TeacherSignupForm() {
                   setCollege(null);
                   setQuery("");
                 }}
-                className="shrink-0 text-[12.5px] font-semibold text-blue-600 hover:underline"
+                className="shrink-0 text-[12.5px] font-semibold text-blue-600 transition hover:text-blue-700 hover:underline dark:text-blue-400"
               >
                 Change
               </button>
             </div>
           ) : (
             <>
-              <input
-                id="college"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Start typing your college name"
-                autoComplete="off"
-                className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-              />
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                  <GraduationCapIcon className="h-[18px] w-[18px]" />
+                </span>
+                <input
+                  id="college"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Start typing your college name"
+                  autoComplete="off"
+                  className={`${INPUT_PLAIN} pl-10`}
+                />
+              </div>
 
-              {searching && <p className="mt-1 text-[12px] text-slate-400">Searching...</p>}
+              {searching && <p className="mt-1.5 text-[12px] text-slate-400 dark:text-slate-500">Searching…</p>}
 
               {visibleResults.length > 0 && (
-                <ul className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200">
+                <ul className="mt-1.5 max-h-52 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 shadow-sm dark:divide-slate-800 dark:border-slate-700">
                   {visibleResults.map((entry) => (
                     <li key={entry.id}>
                       <button
@@ -279,12 +398,14 @@ export function TeacherSignupForm() {
                           setCollege(entry);
                           setResults([]);
                         }}
-                        className="block w-full px-3 py-2 text-left text-[13.5px] transition hover:bg-slate-50"
+                        className="block w-full px-3.5 py-2.5 text-left text-[13.5px] transition hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none dark:hover:bg-slate-800/60 dark:focus-visible:bg-slate-800/60"
                       >
-                        <span className="block font-medium text-slate-800">{entry.name}</span>
-                        {(entry.city || entry.state) && (
-                          <span className="block text-[12px] text-slate-400">
-                            {[entry.city, entry.state].filter(Boolean).join(", ")}
+                        <span className="block font-medium text-slate-800 dark:text-slate-100">
+                          {entry.name}
+                        </span>
+                        {entry.location && (
+                          <span className="mt-0.5 block text-[12px] text-slate-400 dark:text-slate-500">
+                            {entry.location}
                           </span>
                         )}
                       </button>
@@ -294,7 +415,7 @@ export function TeacherSignupForm() {
               )}
 
               {query.trim().length >= 2 && !searching && visibleResults.length === 0 && (
-                <p className="mt-1 text-[12.5px] leading-relaxed text-slate-500">
+                <p className="mt-1.5 text-[12.5px] leading-relaxed text-slate-500 dark:text-slate-400">
                   {/*
                     No free-text fallback (§3). A typed name would create a
                     second spelling of an institution and leave the audience
@@ -306,130 +427,89 @@ export function TeacherSignupForm() {
               )}
             </>
           )}
+
+          {/**
+            * What this college requires, said before the form is filled in.
+            *
+            * Somebody who is going to be refused should learn it here rather
+            * than after typing six fields and choosing a password. The server
+            * decides regardless — this only changes what the screen says.
+            */}
+          {visiblePolicy && !visiblePolicy.selfServe && (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-[12.5px] leading-relaxed text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+              This college invites its teachers. Ask them to send you an invitation link — signing up
+              here will be refused without one.
+            </p>
+          )}
+
+          {visiblePolicy?.mode === "domain" && visiblePolicy.allowedDomains.length > 0 && (
+            <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12.5px] leading-relaxed text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+              Use your college email address (
+              {visiblePolicy.allowedDomains.map((domain) => `@${domain}`).join(" or ")}). Your account
+              still needs approving before you can publish.
+            </p>
+          )}
         </div>
 
-        <div className="grid gap-3.5 sm:grid-cols-2">
-          <Field id="employeeId" label="Employee ID (optional)" value={employeeId} onChange={setEmployeeId} />
-          <Field id="designation" label="Designation (optional)" value={designation} onChange={setDesignation} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField
+            label="Employee ID"
+            name="employeeId"
+            placeholder="Optional"
+            value={employeeId}
+            onChange={setEmployeeId}
+          />
+          <TextField
+            label="Designation"
+            name="designation"
+            placeholder="Optional"
+            value={designation}
+            onChange={setDesignation}
+          />
         </div>
 
-        <Field
-          id="password"
+        <PasswordField
           label="Password"
-          type="password"
+          name="password"
+          placeholder="Create a password"
+          autoComplete="new-password"
+          icon={<LockIcon />}
           value={password}
           onChange={setPassword}
-          required
-          autoComplete="new-password"
           hint="At least 8 characters with a number"
         />
-        <Field
-          id="confirmPassword"
+        <PasswordField
           label="Confirm password"
-          type="password"
+          name="confirmPassword"
+          placeholder="Re-enter your password"
+          autoComplete="new-password"
+          icon={<LockIcon />}
           value={confirmPassword}
           onChange={setConfirmPassword}
-          required
-          autoComplete="new-password"
         />
 
-        {error && (
-          <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[13px] text-rose-700">
-            {error}
-          </p>
-        )}
+        {error && <FormMessage>{error}</FormMessage>}
 
-        <p className="rounded-lg bg-slate-50 px-3 py-2.5 text-[12.5px] leading-relaxed text-slate-500">
+        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
           {/* Said before they sign up, not discovered afterwards (§4). */}
           Your college approves teacher accounts. You can sign in and look around straight away;
           publishing to students opens up once they approve you.
         </p>
 
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-lg bg-blue-600 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
-        >
-          {busy ? "Creating..." : "Create account"}
-        </button>
+        <div className="pt-1">
+          <SubmitButton pending={busy}>Create account</SubmitButton>
+        </div>
       </form>
 
-      <p className="mt-5 text-center text-[13.5px] text-slate-500">
+      <p className="mt-6 text-center text-[13px] text-slate-500 dark:text-slate-400">
         Already have an account?{" "}
-        <Link href="/teacher/login" className="font-semibold text-blue-600 hover:underline">
+        <Link
+          href="/teacher/login"
+          className="font-semibold text-blue-600 transition hover:text-blue-700 hover:underline dark:text-blue-400"
+        >
           Sign in
         </Link>
       </p>
-    </AuthShell>
-  );
-}
-
-function AuthShell({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-[#f7f9fc] px-4 py-10">
-      <div className="w-full max-w-md">
-        <div className="mb-6 text-center">
-          <span className="inline-flex items-center gap-2.5">
-            <BrandMark className="h-9 w-9" />
-            <span className="text-[20px] font-bold tracking-tight text-slate-900">EduPilot</span>
-          </span>
-          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-900/5 px-2.5 py-1 text-[11.5px] font-semibold uppercase tracking-wide text-slate-500">
-            <PresentIcon className="h-3.5 w-3.5" />
-            {subtitle}
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
-          <h1 className="text-[20px] font-bold tracking-tight text-slate-900">{title}</h1>
-          <div className="mt-4">{children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Field({
-  id,
-  label,
-  value,
-  onChange,
-  type = "text",
-  required,
-  autoComplete,
-  hint,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  required?: boolean;
-  autoComplete?: string;
-  hint?: string;
-}) {
-  return (
-    <div>
-      <label htmlFor={id} className="block text-[12.5px] font-semibold text-slate-600">
-        {label}
-      </label>
-      <input
-        id={id}
-        type={type}
-        value={value}
-        required={required}
-        autoComplete={autoComplete}
-        onChange={(event) => onChange(event.target.value)}
-        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-[14px] outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
-      />
-      {hint && <p className="mt-1 text-[12px] text-slate-400">{hint}</p>}
-    </div>
+    </>
   );
 }

@@ -299,7 +299,6 @@ export async function getTeacherDashboard(
     noteTotal,
     notePublished,
     dueSoonRows,
-    recentRows,
     publishedAssignments,
   ] = await Promise.all([
     Assignment.countDocuments(scope),
@@ -312,37 +311,45 @@ export async function getTeacherDashboard(
       .limit(5)
       .select("title targetSnapshot dueAt submittedCount assignedCount")
       .lean(),
-    AssignmentStudent.find({
-      status: { $in: ["submitted", "late"] },
-    })
-      .sort({ submittedAt: -1 })
-      .limit(40)
-      .select("assignmentId studentId submittedAt status")
-      .lean(),
     Assignment.find({ ...scope, status: { $in: ["published", "closed"] } })
       .select("assignedCount submittedCount gradedCount title")
       .lean(),
   ]);
 
+  const ownIds = publishedAssignments.map((row) => row._id);
+  const titleById = new Map(publishedAssignments.map((row) => [String(row._id), row.title]));
+
+  /**
+   * Scoped to **this teacher's assignments**, in the query.
+   *
+   * It used to fetch the forty most recent submissions across the whole
+   * platform and narrow them afterwards. That is correct on an empty database
+   * and wrong on a real one: with any other teacher active, this teacher's rows
+   * fall outside the global forty and the panel reads "Nothing handed in yet"
+   * while their students are handing work in. The filter has to be *in* the
+   * query for the limit to mean "forty of mine".
+   *
+   * `graded` is included. The panel is recent activity, not a queue — marking a
+   * submission should not erase the fact that it arrived, and "how many are
+   * waiting" is already its own figure above.
+   */
+  const recentRows = ownIds.length
+    ? await AssignmentStudent.find({
+        assignmentId: { $in: ownIds },
+        status: { $in: ["submitted", "late", "graded"] },
+        submittedAt: { $ne: null },
+      })
+        .sort({ submittedAt: -1 })
+        .limit(6)
+        .select("assignmentId studentId submittedAt status")
+        .lean()
+    : [];
+
   const assigned = publishedAssignments.reduce((sum, row) => sum + (row.assignedCount ?? 0), 0);
   const submitted = publishedAssignments.reduce((sum, row) => sum + (row.submittedCount ?? 0), 0);
   const graded = publishedAssignments.reduce((sum, row) => sum + (row.gradedCount ?? 0), 0);
 
-  /**
-   * Recent submissions are filtered to this teacher's assignments *after* the
-   * query.
-   *
-   * `AssignmentStudent` carries no teacher, so a server-side filter would need
-   * a `$lookup`. Over-fetching forty rows and narrowing them against a set of
-   * ids already in hand is cheaper and, more importantly, cannot accidentally
-   * show one teacher another's submissions — the intersection is explicit.
-   */
-  const ownIds = new Set(publishedAssignments.map((row) => String(row._id)));
-  const titleById = new Map(publishedAssignments.map((row) => [String(row._id), row.title]));
-
-  const ownRecent = recentRows
-    .filter((row) => ownIds.has(String(row.assignmentId)))
-    .slice(0, 6);
+  const ownRecent = recentRows;
 
   const studentNames = ownRecent.length
     ? await (await import("@/models/User")).User.find({

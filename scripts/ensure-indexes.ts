@@ -19,6 +19,7 @@ import { City, District, State } from "../src/models/Geo";
 import { College } from "../src/models/College";
 import { Course } from "../src/models/Course";
 import { EmailVerificationToken } from "../src/models/EmailVerificationToken";
+import { PasswordResetToken } from "../src/models/PasswordResetToken";
 import { Enrollment } from "../src/models/Enrollment";
 import { ImportJob, ImportRow } from "../src/models/ImportJob";
 import { Lesson } from "../src/models/Lesson";
@@ -28,6 +29,7 @@ import { StudentProfile } from "../src/models/StudentProfile";
 import { Bookmark, LearningEvent, StudentTopicProgress } from "../src/models/Learning";
 import { Subtopic, Topic, TopicContent } from "../src/models/Topic";
 import { TeacherAcademicAssignment, TeacherProfile } from "../src/models/Teacher";
+import { TeacherInvite } from "../src/models/TeacherInvite";
 import {
   Assignment,
   AssignmentStudent,
@@ -38,6 +40,12 @@ import { Notification, NotificationPreference } from "../src/models/Notification
 import { StoredFile } from "../src/models/StoredFile";
 import { Wallet, WalletTransaction } from "../src/models/Wallet";
 import { PaymentOrder } from "../src/models/PaymentOrder";
+import { Referral, ReferralCode } from "../src/models/Referral";
+import {
+  ServiceRequest,
+  ServiceRequestEvent,
+  ServiceTicketCounter,
+} from "../src/models/ServiceRequest";
 import {
   AiAnswerCache,
   AiConversation,
@@ -67,6 +75,12 @@ const MODELS = [
   User,
   StudentProfile,
   EmailVerificationToken,
+  /**
+   * Carries a TTL index, which mongo only creates from a declaration. Without
+   * it, spent and expired reset tokens accumulate forever — a growing table of
+   * credentials that should have stopped existing.
+   */
+  PasswordResetToken,
   RateLimit,
   Course,
   Lesson,
@@ -124,6 +138,12 @@ const MODELS = [
    */
   TeacherProfile,
   TeacherAcademicAssignment,
+  /**
+   * The partial unique index on `(collegeId, email)` is what makes "one live
+   * invitation per address" a database guarantee, and the TTL is what stops
+   * spent invitations accumulating as a list of ways into a college.
+   */
+  TeacherInvite,
   Assignment,
   AssignmentStudent,
   AssignmentSubmission,
@@ -143,6 +163,21 @@ const MODELS = [
   Wallet,
   WalletTransaction,
   PaymentOrder,
+  /**
+   * The help desk. `ServiceRequest.ticket` is unique, and it is what makes the
+   * ticket counter safe: two students submitting in the same instant would
+   * otherwise be handed the same reference.
+   */
+  ServiceRequest,
+  ServiceRequestEvent,
+  ServiceTicketCounter,
+  /**
+   * Referrals. The unique index on `Referral.refereeId` is what makes "one
+   * person is referred once, ever" a database guarantee — without it, an
+   * account that signs up, is rewarded and signs up again earns twice.
+   */
+  ReferralCode,
+  Referral,
 ];
 
 async function main() {

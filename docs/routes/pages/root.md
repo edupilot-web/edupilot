@@ -5,64 +5,84 @@
 | File | [../../../src/app/page.tsx](../../../src/app/page.tsx) |
 | Access | public |
 | Rendering | Server Component; dynamic, because it reads the session cookie |
-| Title | `EduPilot — Learn. Connect. Grow.` |
+| Title | `EduPilot — your syllabus, explained` |
 
-The marketing page: a sticky header and one hero section. It is the only public product page —
-every other link in the header is intended information architecture that does not exist yet.
+The marketing page. A sticky header, a hero and a row of feature cards — **for one audience at a
+time**.
+
+## The rule this page is written to
+
+**Every claim maps to something built, and every link goes somewhere that resolves.**
+
+That is not a style note; it is a correction. The first version of this page advertised **Explore,
+Resources, Scholarships, Mentorship, Community and Events** — six sections of a different product, all
+six of them 404s — and its hero offered to help visitors "discover opportunities, connect with peers
+and mentors", which nothing here does. The secondary call to action pointed at `/explore`, also a 404.
+
+A nav that lies about what a product does is worse than a short one: the visitor who clicks
+*Scholarships* and lands on an error has learned something true and unflattering about the whole
+thing.
+
+There are no marketing sub-pages to link to, and inventing them to fill a nav bar is how the previous
+version happened. What the header carries instead is the one choice a visitor actually needs to make.
+
+## One audience at a time
+
+Students and teachers want different things from this page and neither is served by scrolling past the
+other. An earlier version stacked both — six student features, a how-it-works section, a teacher
+section, a closing call to action — so a teacher scrolled through all of the student material before
+reaching anything addressed to them, and a student scrolled past a teacher section to reach the end.
+
+The page now shows **one** audience and offers a switch. Students are the default, because they are
+almost all of the traffic; a teacher arriving from a colleague's link goes straight to
+`/?for=teachers`.
+
+The switch is a **link, not client state**. It costs a navigation, which Next makes cheap, and buys
+three things state would not: the teacher view is server-rendered rather than appearing after
+hydration, the URL is shareable, and there is no flash of the wrong audience on first paint.
+
+It renders twice and is visible once — in the header above `lg`, inline above the headline below it.
+A switch hidden behind a hamburger is a switch most visitors never find.
 
 ## Composition
 
 | Piece | File | Kind |
 | --- | --- | --- |
-| Page | [page.tsx](../../../src/app/page.tsx) | server — reads the session, renders the two below |
-| Header | [site-header.tsx](../../../src/components/site-header.tsx) | client — nav, Explore dropdown, mobile menu, account menu |
-| Hero | [hero.tsx](../../../src/components/hero.tsx) | server — copy, two CTAs, wave divider |
-| Illustration | [hero-illustration.tsx](../../../src/components/hero-illustration.tsx) | inline SVG, no image request |
-| Brand / icons | [brand.tsx](../../../src/components/brand.tsx), [icons.tsx](../../../src/components/icons.tsx) | inline SVG |
+| Page | [page.tsx](../../../src/app/page.tsx) | server — reads the session, composes the rest |
+| Header | [site-header.tsx](../../../src/components/site-header.tsx) | client — the switch and the account menu |
+| Body | [landing-sections.tsx](../../../src/components/landing-sections.tsx) | server — the switch, both audience views, the footer |
 
-## Backend work this page does
+## What each view says
 
-`headerUser()` in the page file:
-
-1. `getSession()` — verify the cookie; `null` means render the signed-out header.
-2. `connectDB()`, then `User.findById(session.sub).select("name").lean()`.
-3. Returns `{ name, notifications: 3 }`. **The notification count is hard-coded** — there is no
-   notifications model. Marked with a `TODO` in the file.
-
-The whole block is wrapped in `try/catch`: a database that is down or misconfigured logs and
-falls back to the signed-out header rather than failing the marketing page. This is the only
-place in the codebase where a failed `connectDB()` is deliberately swallowed.
-
-## Header states
-
-| Session | Right-hand cluster |
-| --- | --- |
-| signed out | `Sign in` link + `Join Now` button (`/login`, `/signup`) |
-| signed in | search icon, bell with unread dot, avatar with initials, `Ada L.`-style short name, account menu with `Sign out` |
-
-`Sign out` posts to `logoutAction` ([auth-actions.ts](../../../src/lib/auth-actions.ts)), which
-clears the cookie and redirects to `/login` — the same action the signed-in top bar uses.
-
-The header closes its popovers on outside click and on `Escape` via a local `useDismiss` hook,
-and closes every panel on link click rather than in an effect keyed to `pathname`, which would
-cascade renders.
-
-## Links that do not resolve
-
-Documented rather than fixed, because the pages are not written yet.
-
-| Link | Where | Result |
+| | Students (default) | Teachers |
 | --- | --- | --- |
-| `Explore` + its three children (`/explore`, `/explore/courses`, `/explore/programs`, `/explore/research`) | header nav | 404 |
-| `/resources`, `/scholarships`, `/mentorship`, `/community` | header nav | 404 |
-| `/events` | header nav | **redirects to `/login?next=/events`** — `/events` is a signed-in app route, not a marketing page |
-| `Explore courses` | hero secondary CTA → `/explore` | 404 |
+| Headline | Your syllabus, explained and kept up with | Choose a subject, not a list of students |
+| Cards | syllabus, AI tutor, assignments & notes, wallet | audience resolves itself, publish once, mark and give feedback, reminders |
+| Primary CTA | Get started free, or **Go to your dashboard** when signed in | Create a teacher account |
+| The honest note | most colleges are not configured yet | new accounts are approved before they can publish |
 
-`Get started free` → `/signup` and the account-menu links do work.
+Both notes exist for the same reason: a student from an unconfigured college would otherwise sign up,
+onboard and find an empty Curriculum screen with no explanation, and a teacher who signs up and cannot
+publish would otherwise wonder why. A sentence each, on the page rather than after the fact.
 
-## Gaps
+Four cards, not six. The page is a hero, a row and a footer — there is nothing to scroll for.
 
-- No catalogue UI, so the hero's "Explore courses" has nothing to point at even though
-  `GET /api/courses` exists. See [../api/courses.md](../api/courses.md).
-- Unread notification count is a literal `3`.
-- Header nav is aspirational; seven of its eight destinations are dead or mis-targeted (above).
+## Two things it used to get wrong about the signed-in visitor
+
+**The notification bell was fake.** A `<button>` with no handler, showing a hard-coded `3` behind a
+`TODO: replace with a real unread count once notifications exist`. Notifications had existed for a
+while. It is now a `<Link>` to `/notifications` carrying the real count from the service, and
+`HeaderUser.notifications` is a **required** number rather than an optional one — a caller that does
+not know the count has to say `0`, which is at least honest.
+
+**"Join Now" was shown to people who had already joined** and were signed in at the time. Somebody
+signed in wants one thing from this page, so the button is now *Go to dashboard*, the hero CTA becomes
+*Go to your dashboard*, and both the "Teaching instead?" prompt and the closing sign-up section
+disappear.
+
+A dead search button was removed. There is no public search to wire it to.
+
+## Failure behaviour
+
+A database that cannot be reached falls back to the signed-out header rather than throwing. Somebody
+evaluating the product should not meet a stack trace.

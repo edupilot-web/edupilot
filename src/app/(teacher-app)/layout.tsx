@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
+import { unreadCount } from "@/lib/notifications/service";
 import { TeacherShell } from "@/components/teacher/teacher-shell";
 import { getCurrentTeacher } from "@/lib/teaching/teacher";
 import { countTeacherSubjects } from "@/lib/teaching/teacher-view";
@@ -28,7 +29,18 @@ export default async function TeacherLayout({ children }: { children: ReactNode 
    */
   if (!teacher.emailVerified) redirect("/verify-email");
 
-  const subjectCount = await countTeacherSubjects(teacher);
+  /**
+   * The bell's badge, and the subject count, in one round trip.
+   *
+   * Teachers receive notifications too — `TEACHER_APPROVED` and
+   * `TEACHER_REJECTED` are addressed to them — and until now those rows were
+   * written and never shown to anybody. The count is capped at 100 in the
+   * service, so a teacher with a thousand costs the same as one with five.
+   */
+  const [subjectCount, unread] = await Promise.all([
+    countTeacherSubjects(teacher),
+    unreadCount(teacher.userId),
+  ]);
 
   return (
     <TeacherShell
@@ -37,6 +49,7 @@ export default async function TeacherLayout({ children }: { children: ReactNode 
       status={teacher.status}
       canPublish={teacher.canPublish}
       subjectCount={subjectCount}
+      unread={unread}
     >
       {children}
     </TeacherShell>

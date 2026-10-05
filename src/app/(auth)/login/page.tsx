@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { AuthShell, type Feature } from "@/components/auth/auth-shell";
+import { AuthShell } from "@/components/auth/auth-shell";
 import { StudyingTogetherIllustration } from "@/components/auth/illustrations";
 import { LoginForm } from "@/components/auth/login-form";
-import { CubeIcon, SendIcon, UsersIcon } from "@/components/icons";
+import { SIGN_IN_FEATURES } from "@/components/auth/panel-features";
 import { authErrorMessage } from "@/lib/auth-errors";
 import { getCurrentUser } from "@/lib/current-user";
 import { destinationFor } from "@/lib/auth-routing";
@@ -11,32 +11,12 @@ import { safeDestination } from "@/lib/redirects";
 
 export const metadata: Metadata = {
   title: "Log in · EduPilot",
-  description: "Log in to continue your learning and career journey with EduPilot.",
+  description: "Sign in to EduPilot — one account for students and teachers.",
 };
 
-const FEATURES: Feature[] = [
-  {
-    icon: <CubeIcon />,
-    title: "Learn",
-    description: "Access courses and resources",
-    tone: "indigo",
-  },
-  {
-    icon: <SendIcon />,
-    title: "Grow",
-    description: "Build skills for your future",
-    tone: "blue",
-  },
-  {
-    icon: <UsersIcon />,
-    title: "Connect",
-    description: "Network with peers and mentors",
-    tone: "emerald",
-  },
-];
 
 export default async function LoginPage(props: PageProps<"/login">) {
-  const { next, error } = await props.searchParams;
+  const { next, error, reset } = await props.searchParams;
   const destination = safeDestination(next);
 
   /**
@@ -61,25 +41,44 @@ export default async function LoginPage(props: PageProps<"/login">) {
   return (
     <AuthShell
       heading={<>Welcome back! 👋</>}
-      subheading="Log in to continue your learning and career journey"
-      features={FEATURES}
+      subheading="Pick up your semester where you left it"
+      features={SIGN_IN_FEATURES}
       illustration={<StudyingTogetherIllustration className="w-full" />}
       formHeading="Login"
-      formSubheading="Glad to see you again!"
+      /**
+       * One form for both roles.
+       *
+       * A teacher signing in here is sent to their own dashboard by
+       * `destinationFor` — the role decides the destination, so there is nothing
+       * for the visitor to choose and no second sign-in page to find.
+       */
+      formSubheading="Students and teachers, same sign-in."
       mobileIntro={
         <div className="text-center">
           <h1 className="text-[24px] font-bold tracking-tight text-slate-900 dark:text-white">
             Welcome back! 👋
           </h1>
           <p className="mx-auto mt-2 max-w-[260px] text-[13.5px] leading-[1.6] text-slate-500 dark:text-slate-400">
-            Log in to continue your learning and career journey
+            Pick up your semester where you left it
           </p>
         </div>
       }
     >
       <LoginForm
         next={next === undefined ? undefined : destination}
-        notice={authErrorMessage(error)}
+        /**
+         * `?reset=1` is where a completed password reset lands.
+         *
+         * Confirming it here rather than on the reset screen is deliberate: the
+         * reset signs every session out, so the student arrives at a sign-in
+         * form they did not ask for, and without a word it looks as though the
+         * reset failed.
+         */
+        notice={
+          reset === "1"
+            ? "Your password has been changed. Sign in with the new one."
+            : authErrorMessage(error)
+        }
       />
     </AuthShell>
   );

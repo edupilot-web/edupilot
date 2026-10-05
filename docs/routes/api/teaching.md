@@ -42,6 +42,15 @@ audience, and `resolveAudience()` works out who that is at publish time.
 (§3): a typed name would put two spellings of one institution into the system
 and leave the audience resolver unable to match either against a student.
 
+**The college decides who may sign up at all.** `checkEligibility` runs before
+the account is created: invite-only by default, optionally anyone on the
+college's own email domain, optionally anyone. A refusal is a **403** carrying a
+code (`invite-required`, `domain-mismatch`, `invite-wrong-email`…) and leaves
+nothing behind.
+
+This used to be missing entirely — anybody could pick any college and land in
+its queue. See [TECHNICAL.md §6.13a](../../TECHNICAL.md).
+
 The role is set server-side. `registerSchema` accepts only `student`, so there
 is no self-service path to this role — and what signing up grants is nothing:
 the profile lands in `pending`, and what a teacher can reach is
@@ -153,6 +162,12 @@ cohort that has moved on.
 different subject would leave every `AssignmentStudent` row for an audience that
 no longer matches, and the students holding them with no explanation.
 
+Reached from `/teacher/assignments/:id/edit`, which reuses the create form. A
+**draft** carries the Edit link on its detail page; a **published** assignment
+redirects to its submissions, so the link is there instead. **Closed** work has
+neither — the window is over, marks may be out, and changing the instructions
+underneath a grade makes the grade unexplainable.
+
 A material change to a published assignment — the deadline, the instructions,
 the attachments — notifies its students (§79). A corrected typo does not: the
 line is what a student would have to *act* on.
@@ -176,7 +191,10 @@ it worked.
 
 ## Notes
 
-`/api/teacher/notes` mirrors the assignment endpoints with the same gates.
+`/api/teacher/notes` mirrors the assignment endpoints with the same gates, and
+`PUT` is reached from `/teacher/notes/:id/edit`. Notes carry a list of external
+links and the form edits one; the rest ride along untouched, because sending
+only the first would mean correcting a typo in the title silently deleted them.
 Editing a published note does **not** notify: nothing about a note is owed back
 or time-bound, so a correction is not something a student has to act on, and a
 platform that pinged them for every typo is one whose notifications get muted.

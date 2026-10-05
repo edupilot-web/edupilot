@@ -1,20 +1,27 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import Razorpay from "razorpay";
 import { CURRENCY } from "@/lib/payments/fields";
 
 /**
- * Razorpay, over `fetch`.
+ * Razorpay, through the official SDK.
  *
- * No SDK, for the same reason `gemini.ts` has none: the surface used here is
- * four endpoints and an HMAC, and a dependency that ships its own transport and
- * retry policy would have to be reconciled with this app's rather than reused.
- * It also keeps the credential handling visible — the one thing worth being able
- * to read in full on a payments integration.
+ * The SDK owns the transport, the endpoint paths and the response shapes. This
+ * file owns three things it does not give us, and each is here for a reason:
+ *
+ * 1. **A timeout.** `IRazorpayConfig` is `{ key_id, key_secret, headers,
+ *    oauthToken }` — there is no timeout option and no axios passthrough. A hung
+ *    order-create with no deadline is a student watching a spinner with no way
+ *    to know whether they have been charged.
+ * 2. **Error mapping onto a closed set.** The SDK throws a plain
+ *    `{ statusCode, error }` object — not an `Error` — and `orders.ts` branches
+ *    on `retryable` to decide whether a webhook should return non-2xx and be
+ *    redelivered. That decision has to survive whatever the vendor throws.
+ * 3. **Constant-time signature checks.** See `verifyWebhookSignature`.
  *
  * ## Credentials
  *
  * Read from `process.env` at call time, never cached in a module variable and
- * never stored in the database. Three of them, and they are **not**
- * interchangeable:
+ * never stored in the database. Three, and they are **not** interchangeable:
  *
  * | Variable | Secret? | Used for |
  * | --- | --- | --- |
@@ -22,15 +29,12 @@ import { CURRENCY } from "@/lib/payments/fields";
  * | `RAZORPAY_KEY_SECRET` | yes | API auth, and the checkout callback signature |
  * | `RAZORPAY_WEBHOOK_SECRET` | yes | the webhook signature, and *only* that |
  *
- * The webhook secret is separate from the key secret in Razorpay's own design,
- * and conflating them is a real and common mistake: verification then fails for
- * every webhook, which looks like Razorpay being broken rather than like a
- * configuration error.
+ * The webhook secret is separate in Razorpay's own design, and conflating them
+ * is a common mistake: verification then fails for every webhook, which looks
+ * like Razorpay being broken rather than like a configuration error.
  */
 
-const API = "https://api.razorpay.com/v1";
-
-/** How long any single Razorpay call may take before it is abandoned. */
+/** How long any single Razorpay call may take before we stop waiting. */
 const TIMEOUT_MS = 20_000;
 
 export type RazorpayMode = "test" | "live";
@@ -81,10 +85,10 @@ function webhookSecret(): string | null {
 /**
  * Test or live, read from the key itself rather than from a separate flag.
  *
- * A `RAZORPAY_MODE` variable beside the keys is a variable that can disagree
- * with them, and the direction it disagrees in — a live key with the mode left
- * on "test" — is the one that takes real money while every screen says it is a
- * sandbox. The prefix cannot be wrong, because it *is* the key.
+ * A `RAZORPAY_MODE` variable beside the keys is one that can disagree with them,
+ * and the direction it disagrees in — a live key with the mode left on "test" —
+ * takes real money while every screen says sandbox. The prefix cannot be wrong,
+ * because it *is* the key.
  */
 export function mode(): RazorpayMode {
   return keyId()?.startsWith("rzp_live") ? "live" : "test";
@@ -100,91 +104,105 @@ export function isWebhookConfigured(): boolean {
   return Boolean(webhookSecret());
 }
 
-function authHeader(): string {
+/**
+ * A client per call, not a module-level singleton.
+ *
+ * The SDK takes its credentials in the constructor, so a cached instance would
+ * hold whatever the key was at boot — and a long-lived server would keep serving
+ * a rotated-out key. Constructing one assembles an axios instance; it costs
+ * nothing next to the HTTP call that follows.
+ *
+ * Called **outside** `call()` by every caller, so a missing key throws
+ * `not-configured` rather than being caught by the transport handler and
+ * relabelled `unavailable`. A missing credential is not transient and must not
+ * be reported as if it were.
+ */
+function client(): Razorpay {
   const id = keyId();
   const secret = keySecret();
+
   if (!id || !secret) {
-    throw new PaymentError(
-      "not-configured",
-      "Payments are not configured on this server.",
-      { retryable: false }
-    );
+    throw new PaymentError("not-configured", "Payments are not configured on this server.", {
+      retryable: false,
+    });
   }
-  return `Basic ${Buffer.from(`${id}:${secret}`).toString("base64")}`;
+
+  return new Razorpay({ key_id: id, key_secret: secret });
 }
 
 // ── Transport ─────────────────────────────────────────────────────────────
 
-type RazorpayError = { error?: { code?: string; description?: string; reason?: string } };
+type SdkError = { statusCode?: number; error?: { code?: string; description?: string } };
 
-async function call<T>(
-  path: string,
-  init: { method: "GET" | "POST"; body?: unknown }
-): Promise<T> {
-  /**
-   * Built **before** the try block, deliberately.
-   *
-   * `authHeader()` throws `not-configured` when a key is missing, and inside the
-   * try that rejection was caught by the transport handler and relabelled
-   * `unavailable` — so a deployment with no keys told its operator "Razorpay
-   * could not be reached, try again in a moment" about a problem that will never
-   * fix itself. A missing credential is not a transient failure and must not be
-   * reported as one.
-   */
-  const authorization = authHeader();
+/**
+ * Run an SDK call under a deadline, and normalise whatever it throws.
+ *
+ * `Promise.race` rather than an abort signal, because the SDK exposes no way to
+ * pass one. The honest difference: this stops us **waiting**, it does not cancel
+ * the request — the socket stays open until axios finishes with it.
+ *
+ * Acceptable here because a late response cannot do harm: the `await` has
+ * already rejected and the caller has moved on, so there is nothing left for it
+ * to mutate. An order created after we gave up is an orphan either way, which is
+ * equally true of a real abort — cancelling client-side never un-does a
+ * server-side write.
+ */
+async function call<T>(operation: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new PaymentError("timeout", "Razorpay did not respond in time.")),
+      TIMEOUT_MS
+    );
+  });
 
-  let response: Response;
   try {
-    response = await fetch(`${API}${path}`, {
-      method: init.method,
-      headers: {
-        Authorization: authorization,
-        "Content-Type": "application/json",
-      },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-      signal: controller.signal,
-      // A payment call must never be served from a cache, and Next patches
-      // `fetch` to cache by default in some contexts.
-      cache: "no-store",
-    });
-  } catch {
-    if (controller.signal.aborted) {
-      throw new PaymentError("timeout", "Razorpay did not respond in time.");
-    }
-    throw new PaymentError("unavailable", "Razorpay could not be reached.");
+    return await Promise.race([operation(), deadline]);
+  } catch (err) {
+    throw normalise(err);
   } finally {
     clearTimeout(timer);
   }
-
-  const payload = (await response.json().catch(() => null)) as (T & RazorpayError) | null;
-
-  if (!response.ok) throw errorFor(response.status, payload);
-  if (!payload) {
-    throw new PaymentError("unknown", "Razorpay returned a response that could not be read.");
-  }
-
-  return payload;
 }
 
 /**
- * Map a Razorpay failure onto the closed set.
+ * Map whatever the SDK threw onto the closed set.
  *
+ * Three shapes arrive here:
+ *
+ * - our own `PaymentError`, from the timeout — passed through;
+ * - the SDK's `{ statusCode, error }`, which is a **plain object**, not an
+ *   `Error`, so `instanceof` is no help and the shape has to be sniffed;
+ * - a `TypeError`, when the request never reached Razorpay at all. Their
+ *   `normalizeError` reads `err.response.status` unguarded, so a DNS failure or
+ *   a dropped connection throws from inside the SDK rather than producing an
+ *   error object. It surfaces here as `unavailable`, which is what it is.
+ */
+function normalise(err: unknown): PaymentError {
+  if (err instanceof PaymentError) return err;
+
+  const sdk = err as SdkError;
+  if (typeof sdk?.statusCode === "number") {
+    return errorFor(sdk.statusCode, sdk.error?.description);
+  }
+
+  return new PaymentError("unavailable", "Razorpay could not be reached.");
+}
+
+/**
  * `description` is passed through for 400: it names the field that was wrong and
  * is the whole diagnosis. It is **not** passed through for 401 — that response
  * can echo the key id, and a credential has no business in a log line or an
  * error surfaced to a caller.
  */
-function errorFor(status: number, payload: RazorpayError | null): PaymentError {
-  const detail = payload?.error?.description;
-
+function errorFor(status: number, detail?: string): PaymentError {
   if (status === 400) {
-    return new PaymentError("rejected", `Razorpay rejected the request${detail ? `: ${detail}` : "."}`, {
-      retryable: false,
-      status,
-    });
+    return new PaymentError(
+      "rejected",
+      `Razorpay rejected the request${detail ? `: ${detail}` : "."}`,
+      { retryable: false, status }
+    );
   }
   if (status === 401 || status === 403) {
     return new PaymentError(
@@ -199,7 +217,9 @@ function errorFor(status: number, payload: RazorpayError | null): PaymentError {
   if (status >= 500) {
     return new PaymentError("unavailable", "Razorpay is temporarily unavailable.", { status });
   }
-  return new PaymentError("unknown", `Razorpay returned an unexpected status ${status}.`, { status });
+  return new PaymentError("unknown", `Razorpay returned an unexpected status ${status}.`, {
+    status,
+  });
 }
 
 // ── Orders ────────────────────────────────────────────────────────────────
@@ -217,26 +237,35 @@ export async function createOrder(input: {
   receipt: string;
   notes?: Record<string, string>;
 }): Promise<RazorpayOrder> {
-  return call<RazorpayOrder>("/orders", {
-    method: "POST",
-    body: {
+  const rzp = client();
+
+  const order = await call(() =>
+    rzp.orders.create({
       amount: input.amountPaise,
       currency: CURRENCY,
       receipt: input.receipt,
       /**
        * Auto-capture.
        *
-       * Without it a payment lands `authorized` and has to be captured by a
-       * second call, and an authorisation that is never captured is money held
-       * on a student's card that silently expires. There is nothing to review
-       * between authorisation and capture for a wallet top-up — the goods are a
-       * number going up — so the two-step flow adds a failure mode and buys
-       * nothing.
+       * Without it a payment lands `authorized` and needs a second call to
+       * capture, and an authorisation that is never captured is money held on a
+       * student's card that silently expires. There is nothing to review between
+       * the two steps for a wallet top-up — the goods are a number going up — so
+       * the two-step flow adds a failure mode and buys nothing.
        */
-      payment_capture: 1,
+      payment_capture: true,
       notes: input.notes ?? {},
-    },
-  });
+    })
+  );
+
+  return {
+    id: order.id,
+    // The SDK types `amount` as `string | number`; ours is always paise.
+    amount: Number(order.amount),
+    currency: order.currency,
+    receipt: order.receipt ?? input.receipt,
+    status: order.status,
+  };
 }
 
 export type RazorpayPayment = {
@@ -255,10 +284,22 @@ export type RazorpayPayment = {
  *
  * Used to **re-check** what a browser or a webhook told us. A signature proves a
  * message came from Razorpay; it does not prove the payment is still captured,
- * and a payment can be refunded between the webhook being sent and it arriving.
+ * and a payment can be refunded between a webhook being queued and it arriving.
  */
 export async function fetchPayment(paymentId: string): Promise<RazorpayPayment> {
-  return call<RazorpayPayment>(`/payments/${encodeURIComponent(paymentId)}`, { method: "GET" });
+  const rzp = client();
+  const payment = await call(() => rzp.payments.fetch(paymentId));
+
+  return {
+    id: payment.id,
+    order_id: payment.order_id ?? null,
+    amount: Number(payment.amount),
+    currency: payment.currency,
+    status: payment.status,
+    method: payment.method,
+    error_description: payment.error_description ?? null,
+    error_reason: payment.error_reason ?? null,
+  };
 }
 
 export type RazorpayRefund = {
@@ -273,33 +314,39 @@ export async function createRefund(input: {
   amountPaise: number;
   notes?: Record<string, string>;
 }): Promise<RazorpayRefund> {
-  return call<RazorpayRefund>(`/payments/${encodeURIComponent(input.paymentId)}/refund`, {
-    method: "POST",
-    body: {
+  const rzp = client();
+
+  const refund = await call(() =>
+    rzp.payments.refund(input.paymentId, {
       amount: input.amountPaise,
       /**
-       * `normal`, not `optimum`. Instant refunds cost extra and land on the
-       * same card either way; a campus wallet has no reason to pay for speed.
+       * `normal`, not `optimum`. Instant refunds cost extra and land on the same
+       * card either way; a campus wallet has no reason to pay for speed.
        */
       speed: "normal",
       notes: input.notes ?? {},
-    },
-  });
+    })
+  );
+
+  return {
+    id: refund.id,
+    payment_id: refund.payment_id,
+    amount: Number(refund.amount),
+    status: refund.status as RazorpayRefund["status"],
+  };
 }
 
 // ── Signatures ────────────────────────────────────────────────────────────
 
 /**
- * Compare two hex digests without leaking how far they matched.
+ * Compare two digests without leaking how far they matched.
  *
- * `===` on a string returns as soon as two characters differ, and the time that
- * takes is measurable across enough requests — which is a way to derive a valid
- * signature one character at a time. `timingSafeEqual` compares every byte
- * regardless.
+ * `===` returns as soon as two characters differ, and that timing is measurable
+ * across enough requests — which is a way to derive a valid signature one
+ * character at a time. `timingSafeEqual` compares every byte regardless.
  *
- * It throws on a length mismatch, so the lengths are checked first; that check
- * leaks only the *length* of the supplied value, which an attacker already knows
- * because they chose it.
+ * It throws on a length mismatch, so lengths are checked first; that leaks only
+ * the *length* of the supplied value, which the caller chose.
  */
 function safeEqual(expected: string, received: string): boolean {
   const a = Buffer.from(expected, "utf8");
@@ -336,13 +383,21 @@ export function verifyCheckoutSignature(input: {
 /**
  * Verify a webhook, against the **raw request body**.
  *
- * The bytes matter: `JSON.parse` then `JSON.stringify` reorders keys and drops
- * insignificant whitespace, and the digest of the round-tripped string does not
- * match the digest of what was sent. Every caller must read `await req.text()`
- * and hash *that*, before parsing.
+ * Deliberately *not* `Razorpay.validateWebhookSignature`, and the reason is
+ * worth stating because reaching for the vendor helper is the obvious move:
  *
- * Keyed with `RAZORPAY_WEBHOOK_SECRET`, which is a different secret from the API
- * key secret.
+ * - it compares with `expectedSignature === signature`, which is not
+ *   constant-time;
+ * - it **throws** when the signature header is missing, so a malformed request
+ *   would become a 500 where it should be a 400.
+ *
+ * The maths is four lines and identical; only the comparison and the failure
+ * mode differ, and both differences favour this version.
+ *
+ * The raw bytes matter: `JSON.parse` then `JSON.stringify` reorders keys and
+ * drops insignificant whitespace, and the digest of the round-tripped string
+ * does not match the digest of what was sent. Every caller must read
+ * `await req.text()` and hash *that*, before parsing.
  */
 export function verifyWebhookSignature(rawBody: string, signature: string | null): boolean {
   const secret = webhookSecret();

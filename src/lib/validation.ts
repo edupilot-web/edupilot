@@ -32,6 +32,15 @@ export const registerSchema = z.object({
    * through their own endpoint, which sets the role server-side.
    */
   role: z.enum(SELF_SERVICE_ROLES).optional(),
+  /**
+   * An invite code, when the sign-up came from a referral link.
+   *
+   * Optional and never validated for existence here: a code that turns out to
+   * belong to nobody is dropped when the account is created. Rejecting the
+   * registration would let somebody probe which codes exist by watching which
+   * sign-ups fail.
+   */
+  ref: z.string().trim().max(32).optional(),
 });
 
 export const loginSchema = z.object({

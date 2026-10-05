@@ -59,6 +59,7 @@ export const config = {
     "/teacher/dashboard/:path*",
     "/teacher/assignments/:path*",
     "/teacher/notes/:path*",
+    "/teacher/notifications/:path*",
     "/teacher/students/:path*",
     "/teacher/profile/:path*",
     "/timetable/:path*",

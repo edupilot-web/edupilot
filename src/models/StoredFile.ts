@@ -29,6 +29,10 @@ export const FILE_PURPOSES = [
   "assignment_attachment",
   "note_attachment",
   "submission_attachment",
+  /** What a student attaches to a support request — usually a screenshot. */
+  "service_request_attachment",
+  /** What support sends back — a corrected export, a receipt, a screenshot. */
+  "service_request_resolution",
 ] as const;
 
 export type FilePurpose = (typeof FILE_PURPOSES)[number];

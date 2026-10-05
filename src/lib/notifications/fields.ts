@@ -20,6 +20,9 @@ export const NOTIFICATION_TYPES = [
   "NOTE_PUBLISHED",
   "TEACHER_APPROVED",
   "TEACHER_REJECTED",
+  "SERVICE_REQUEST_UPDATED",
+  "SERVICE_REQUEST_RESOLVED",
+  "SERVICE_REQUEST_NEEDS_YOU",
 ] as const;
 
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -73,6 +76,16 @@ export const TYPE_CATEGORY: Record<NotificationType, NotificationCategory> = {
   NOTE_PUBLISHED: "notes",
   TEACHER_APPROVED: "account",
   TEACHER_REJECTED: "account",
+  /**
+   * `account`, and therefore not optional.
+   *
+   * "We need something from you before this can go further" is the message that
+   * decides whether a request is ever finished. A student who muted it would
+   * wait indefinitely for a certificate that is waiting on them.
+   */
+  SERVICE_REQUEST_UPDATED: "account",
+  SERVICE_REQUEST_RESOLVED: "account",
+  SERVICE_REQUEST_NEEDS_YOU: "account",
 };
 
 /**
@@ -129,7 +142,7 @@ export function channelImplemented(channel: NotificationChannel): boolean {
  * (§63) and the whole of the deep link (§87). An open string would let two
  * spellings of the same entity produce two notifications for one event.
  */
-export const NOTIFICATION_ENTITIES = ["assignment", "note", "submission", "teacher"] as const;
+export const NOTIFICATION_ENTITIES = ["assignment", "note", "submission", "teacher", "service_request"] as const;
 export type NotificationEntity = (typeof NOTIFICATION_ENTITIES)[number];
 
 // ── Defaults ──────────────────────────────────────────────────────────────
@@ -200,6 +213,9 @@ export function notificationCopy(
     marks?: number | null;
     maxMarks?: number | null;
     reason?: string | null;
+    /** The human ticket reference, for the help desk copy. */
+    ticket?: string | null;
+    statusLabel?: string | null;
   }
 ): NotificationCopy {
   const subject = data.subjectName ?? "your course";
@@ -249,6 +265,28 @@ export function notificationCopy(
         message: [item, data.teacherName].filter(Boolean).join(" · "),
       };
 
+    /**
+     * The ticket leads, because it is what the student quotes back and what
+     * they will search their notifications for.
+     */
+    case "SERVICE_REQUEST_UPDATED":
+      return {
+        title: `${data.ticket ?? "Your request"}: ${data.statusLabel ?? "updated"}`,
+        message: item,
+      };
+
+    case "SERVICE_REQUEST_NEEDS_YOU":
+      return {
+        title: `${data.ticket ?? "Your request"} needs something from you`,
+        message: data.reason ?? item,
+      };
+
+    case "SERVICE_REQUEST_RESOLVED":
+      return {
+        title: `${data.ticket ?? "Your request"} is resolved`,
+        message: data.reason ?? item,
+      };
+
     case "TEACHER_APPROVED":
       return {
         title: "Your teacher account has been approved",
@@ -290,5 +328,7 @@ export function notificationHref(
       return `/assignments/${entityId}`;
     case "teacher":
       return "/teacher/dashboard";
+    case "service_request":
+      return `/service-requests/${entityId}`;
   }
 }

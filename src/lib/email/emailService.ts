@@ -1,6 +1,11 @@
 import { consoleTransport } from "@/lib/email/console";
 import { brevoTransport } from "@/lib/email/brevo";
 import { verificationEmail } from "@/lib/email/templates/verification";
+import {
+  noPasswordEmail,
+  passwordResetEmail,
+} from "@/lib/email/templates/password-reset";
+import { teacherInviteEmail } from "@/lib/email/templates/teacher-invite";
 import type { EmailMessage, EmailSendResult, EmailTransport } from "@/lib/email/types";
 
 /**
@@ -90,6 +95,65 @@ async function send(message: EmailMessage): Promise<EmailSendResult> {
  * not undo an account that was already created, and the caller's answer to it
  * is to offer "resend", not to roll back.
  */
+/**
+ * The password reset link.
+ *
+ * A sibling of the verification sender rather than a generic `sendEmail`: every
+ * message the product sends goes through a named function here, so what can
+ * leave the building is a list one file long.
+ */
+export async function sendPasswordResetEmail(params: {
+  email: string;
+  name: string;
+  resetUrl: string;
+  expiresInMinutes: number;
+}): Promise<EmailSendResult> {
+  const { subject, html, text } = passwordResetEmail({
+    name: params.name,
+    resetUrl: params.resetUrl,
+    expiresInMinutes: params.expiresInMinutes,
+  });
+
+  return send({ to: { email: params.email, name: params.name }, subject, html, text });
+}
+
+/**
+ * The invitation to create a teacher account.
+ *
+ * Addressed by email only — there is no name to use, because the whole point
+ * of an invitation is that the person does not have an account yet. Resolves
+ * with `{ ok: false }` rather than throwing, like its siblings: the invitation
+ * exists in the database the moment it is issued, and a delivery failure means
+ * the administrator sends the link by hand, not that the invitation is void.
+ */
+export async function sendTeacherInviteEmail(params: {
+  email: string;
+  collegeName: string;
+  invitedByName: string;
+  inviteUrl: string;
+  expiresInDays: number;
+  designation?: string | null;
+}): Promise<EmailSendResult> {
+  const { subject, html, text } = teacherInviteEmail({
+    collegeName: params.collegeName,
+    invitedByName: params.invitedByName,
+    inviteUrl: params.inviteUrl,
+    expiresInDays: params.expiresInDays,
+    designation: params.designation ?? null,
+  });
+
+  return send({ to: { email: params.email }, subject, html, text });
+}
+
+/** Sent when a reset was asked for on an account that signs in with Google. */
+export async function sendNoPasswordEmail(params: {
+  email: string;
+  name: string;
+}): Promise<EmailSendResult> {
+  const { subject, html, text } = noPasswordEmail({ name: params.name });
+  return send({ to: { email: params.email, name: params.name }, subject, html, text });
+}
+
 export async function sendVerificationEmail(params: {
   email: string;
   name: string;

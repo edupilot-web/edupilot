@@ -46,6 +46,23 @@ const userSchema = new Schema(
     /** True when the provider vouched for the address, or we verified it. */
     emailVerified: { type: Boolean, default: false },
 
+    /**
+     * Sessions issued before this moment are refused.
+     *
+     * The only way to revoke a stateless JWT. Sessions here are signed tokens
+     * with no server-side store, so a password reset would otherwise leave every
+     * existing session working — which defeats the main reason people reset one:
+     * they believe somebody else is in their account.
+     *
+     * Compared against the token's `iat` by the authoritative gates
+     * (`requireAuth`, `getCurrentUser`, `getCurrentTeacher`), never by
+     * `proxy.ts` — that runs before the database is reachable and is a cheap
+     * cookie check by design.
+     *
+     * Null on every account that has never had a reason to revoke.
+     */
+    sessionsValidFrom: { type: Date, default: null },
+
     // Optional contact details. Not asked for during onboarding — see
     // docs/TECHNICAL.md; they are filled in later from the profile screen.
     phone: { type: String, default: null, trim: true, maxlength: 24 },

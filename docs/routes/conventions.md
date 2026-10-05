@@ -104,7 +104,7 @@ request → proxy.ts            cookie present?  no → /login?next=…
 - The layout verifies the token and loads the user through `getCurrentUser()`, which is wrapped
   in React's `cache`, so the layout and the page inside it share one query per request.
 - `AppShell` owns the mobile drawer state and one shared amber notice slot. Controls with no
-  backend (search, the notification bell, Upgrade to Pro) route through that slot and say they
+  backend (search) route through that slot and say they
   are not connected rather than looking broken.
 - The path list lives once in [../../src/lib/app-routes.ts](../../src/lib/app-routes.ts).
   `proxy.ts`'s `config.matcher` repeats it literally because Next requires the matcher to be

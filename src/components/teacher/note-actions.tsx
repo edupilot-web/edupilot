@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import type { NoteStatus } from "@/lib/teaching/fields";
@@ -91,6 +92,14 @@ export function NoteActions({ noteId, status }: { noteId: string; status: NoteSt
         <button type="button" disabled={busy} onClick={() => void act("restore")} className={button}>
           {busy ? "..." : "Publish again"}
         </button>
+      )}
+
+      {/* Archived notes are not editable: they have been taken down
+          deliberately, and editing something nobody can see has no purpose. */}
+      {status !== "archived" && (
+        <Link href={`/teacher/notes/${noteId}/edit`} className={button}>
+          Edit
+        </Link>
       )}
     </div>
   );

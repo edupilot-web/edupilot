@@ -16,20 +16,51 @@ import type { AcademicContextTree } from "@/lib/teaching/teacher";
  * The audience is the same, resolved the same way, from the same subject
  * choice: a teacher never picks students (§102).
  */
+/** Notes being edited, rather than written from scratch. */
+export type EditableNote = {
+  id: string;
+  status: string;
+  subjectId: string;
+  title: string;
+  description: string;
+  content: string;
+  /**
+   * Every link the notes carry, not just the one the form edits.
+   *
+   * The form has a single link field; the model holds a list. Passing only the
+   * first would mean a teacher who fixes a typo in the title silently loses the
+   * other links, because the save sends the whole array. They are carried
+   * through untouched instead.
+   */
+  links: { label: string | null; url: string }[];
+};
+
 export function NoteForm({
   context,
   canPublish,
+  existing = null,
 }: {
   context: AcademicContextTree;
   canPublish: boolean;
+  /**
+   * Null when writing new notes.
+   *
+   * Editing reuses this form for the same reason the assignment form is reused:
+   * the fields and their validation are identical, and the copy teachers touch
+   * less often is the one that would drift.
+   */
+  existing?: EditableNote | null;
 }) {
   const router = useRouter();
+  const editing = existing !== null;
 
-  const [subjectId, setSubjectId] = useState("");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [content, setContent] = useState("");
-  const [link, setLink] = useState("");
+  const [subjectId, setSubjectId] = useState(existing?.subjectId ?? "");
+  const [title, setTitle] = useState(existing?.title ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [content, setContent] = useState(existing?.content ?? "");
+  const [link, setLink] = useState(existing?.links[0]?.url ?? "");
+  /** Links beyond the first, preserved verbatim across an edit. */
+  const extraLinks = existing?.links.slice(1) ?? [];
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,17 +73,30 @@ export function NoteForm({
     setError(null);
 
     try {
-      const response = await fetch("/api/teacher/notes", {
-        method: "POST",
+      /**
+       * `subjectId` on create only.
+       *
+       * The update schema omits it: moving published notes to another subject
+       * would leave every `NoteRecipient` row pointing at an audience that no
+       * longer matches, and the students holding them with no explanation.
+       */
+      const response = await fetch(
+        editing ? `/api/teacher/notes/${existing.id}` : "/api/teacher/notes",
+        {
+        method: editing ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          subjectId,
+          ...(editing ? {} : { subjectId }),
           title,
           description: description || null,
           content: content || null,
-          externalLinks: link.trim() ? [{ label: null, url: link.trim() }] : [],
+          externalLinks: [
+            ...(link.trim() ? [{ label: existing?.links[0]?.label ?? null, url: link.trim() }] : []),
+            ...extraLinks,
+          ],
         }),
-      });
+        }
+      );
 
       const payload = (await response.json().catch(() => null)) as
         | { data?: { id?: string }; error?: { message?: string } }
@@ -66,6 +110,9 @@ export function NoteForm({
       const id = payload.data.id;
 
       if (!publish) {
+        // The list is server-rendered and the router cache still holds the
+        // version from before this save.
+        if (editing) router.refresh();
         router.push("/teacher/notes");
         return;
       }
@@ -121,6 +168,7 @@ export function NoteForm({
         <select
           id="note-subject"
           required
+          disabled={editing}
           value={subjectId}
           onChange={(event) => setSubjectId(event.target.value)}
           className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-[14px] text-slate-700 outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
@@ -230,19 +278,35 @@ export function NoteForm({
         <button
           type="submit"
           disabled={busy || !subjectId || !title.trim()}
-          className="rounded-lg border border-slate-200 px-4 py-2.5 text-[14px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          className={
+            editing
+              ? "rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
+              : "rounded-lg border border-slate-200 px-4 py-2.5 text-[14px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          }
         >
-          {busy ? "Saving..." : "Save as draft"}
+          {busy ? "Saving..." : editing ? "Save changes" : "Save as draft"}
         </button>
 
-        <button
-          type="button"
-          disabled={busy || !canPublish || !subjectId || !title.trim()}
-          onClick={() => void save(true)}
-          className="rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
-        >
-          {busy ? "Working..." : "Save and publish"}
-        </button>
+        {!editing && (
+          <button
+            type="button"
+            disabled={busy || !canPublish || !subjectId || !title.trim()}
+            onClick={() => void save(true)}
+            className="rounded-lg bg-blue-600 px-5 py-2.5 text-[14px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/25"
+          >
+            {busy ? "Working..." : "Save and publish"}
+          </button>
+        )}
+
+        {editing && existing.status === "published" && (
+          /* Unlike an assignment, editing published notes notifies nobody:
+             nothing about notes is owed back or time-bound, so a correction is
+             not something a student has to act on. Worth saying, because the
+             assignment form says the opposite. */
+          <p className="self-center text-[12.5px] text-slate-400 dark:text-slate-500">
+            These are live. Corrections appear straight away and your students are not pinged.
+          </p>
+        )}
       </div>
     </form>
   );

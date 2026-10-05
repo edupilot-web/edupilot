@@ -101,6 +101,8 @@ export const TRANSACTION_TYPES = [
   "reversal",
   /** An administrator correcting the balance, always with a reason. */
   "adjustment",
+  /** Money in, for inviting somebody who then actually joined. */
+  "referral",
 ] as const;
 export type TransactionType = (typeof TRANSACTION_TYPES)[number];
 
@@ -110,6 +112,7 @@ export const TRANSACTION_TYPE_LABELS: Record<TransactionType, string> = {
   refund: "Refunded",
   reversal: "Reversed",
   adjustment: "Adjustment",
+  referral: "Referral bonus",
 };
 
 /**
@@ -124,6 +127,7 @@ export const TRANSACTION_DIRECTION: Record<TransactionType, "credit" | "debit"> 
   refund: "debit",
   reversal: "credit",
   adjustment: "credit", // sign carried by the amount; see `adjustWallet`
+  referral: "credit",
 };
 
 export const TRANSACTION_STATUSES = ["pending", "success", "failed"] as const;
@@ -210,4 +214,15 @@ export function creditKeyFor(paymentId: string): string {
 
 export function refundKeyFor(refundId: string): string {
   return `razorpay:refund:${refundId}`;
+}
+
+/**
+ * The idempotency key for a referral payout.
+ *
+ * Keyed on the **referral**, not on either person, so the two sides of one
+ * referral get distinct keys and neither can be paid twice however many times
+ * qualification is attempted.
+ */
+export function referralKeyFor(referralId: string, side: "referrer" | "referee"): string {
+  return `referral:${referralId}:${side}`;
 }

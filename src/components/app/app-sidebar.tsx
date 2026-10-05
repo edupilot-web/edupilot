@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandMark } from "@/components/brand";
-import { CloseIcon, CrownIcon } from "@/components/icons";
+import { CloseIcon } from "@/components/icons";
 import { NAV_GROUPS } from "@/components/app/nav";
 
 /**
@@ -14,11 +14,9 @@ import { NAV_GROUPS } from "@/components/app/nav";
 export function AppSidebar({
   open,
   onClose,
-  onUpgrade,
 }: {
   open: boolean;
   onClose: () => void;
-  onUpgrade: () => void;
 }) {
   const pathname = usePathname();
 
@@ -90,24 +88,6 @@ export function AppSidebar({
           ))}
         </nav>
 
-        <div className="border-t border-white/5 p-3">
-          <div className="rounded-xl bg-[#16294d] p-3.5">
-            <p className="flex items-center gap-2 text-[14px] font-semibold text-white">
-              <CrownIcon className="h-[17px] w-[17px] text-amber-400" />
-              Upgrade to Pro
-            </p>
-            <p className="mt-1 text-[11.5px] leading-[1.45] text-slate-400">
-              Unlock premium courses and career tools.
-            </p>
-            <button
-              type="button"
-              onClick={onUpgrade}
-              className="mt-2.5 w-full rounded-lg bg-blue-600 py-[7px] text-[13px] font-semibold text-white transition hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50"
-            >
-              Upgrade Now
-            </button>
-          </div>
-        </div>
       </aside>
     </>
   );

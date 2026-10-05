@@ -69,6 +69,23 @@ export const UPLOAD_POLICY: Record<
     mimeTypes: [...documentMimes(), "text/x-python", "text/x-java-source", "application/x-zip-compressed"],
     maxFiles: 5,
   },
+  /**
+   * Evidence for a request — a photo of the broken fitting, a scan of the old
+   * certificate. Images matter more here than anywhere else in the product,
+   * which is why the cap is small: a phone photo is a couple of megabytes and
+   * nothing a help desk needs is larger.
+   */
+  service_request_attachment: {
+    maxBytes: 10 * 1024 * 1024,
+    mimeTypes: documentMimes(),
+    maxFiles: 5,
+  },
+  /** The issued document. Generous, because a scanned transcript is heavy. */
+  service_request_resolution: {
+    maxBytes: 25 * 1024 * 1024,
+    mimeTypes: documentMimes(),
+    maxFiles: 5,
+  },
 };
 
 function documentMimes(): string[] {

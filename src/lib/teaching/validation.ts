@@ -77,6 +77,14 @@ export const teacherSignupSchema = z
     employeeId: z.string().trim().max(40).nullish(),
     designation: z.string().trim().max(80).nullish(),
     phone: z.string().trim().max(24).nullish(),
+    /**
+     * From `?invite=` on an invitation link.
+     *
+     * Optional, because a college on `domain` or `open` mode needs none — and
+     * never trusted on its own: `checkEligibility` verifies it against the
+     * college and the address before anything is created.
+     */
+    inviteToken: z.string().trim().max(128).nullish(),
   })
   .refine((values) => values.password === values.confirmPassword, {
     error: "Passwords do not match",

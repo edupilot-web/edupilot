@@ -96,6 +96,9 @@ export type NotifyInput = {
     marks?: number | null;
     maxMarks?: number | null;
     reason?: string | null;
+    /** The help desk's human reference, e.g. `SR-2026-00042`. */
+    ticket?: string | null;
+    statusLabel?: string | null;
   };
   /** Groups one publish, so a bad fan-out can be traced. */
   batchId?: string | null;

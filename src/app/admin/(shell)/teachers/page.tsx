@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Cell, Column, DataTable, PrimaryCell, Row } from "@/components/admin/data-table";
-import { Badge, Card, EmptyState, PageHeader, type BadgeTone } from "@/components/admin/ui";
+import { Badge, ButtonLink, Card, EmptyState, PageHeader, type BadgeTone } from "@/components/admin/ui";
 import { TeacherRowActions } from "@/components/admin/teacher-actions";
 import { requirePermission } from "@/lib/admin/current-admin";
 import { formatNumber, formatRelative } from "@/lib/admin/format";
@@ -60,11 +60,16 @@ export default async function TeachersPage(props: { searchParams: Promise<Search
         description="Teacher accounts, their approval, and the subjects each one may publish to. A teacher with no subject assigned cannot publish anything at all."
         breadcrumbs={[{ label: "Institution Management" }, { label: "Teachers" }]}
         meta={
-          pending > 0 ? (
-            <Badge tone="warning">{formatNumber(pending)} awaiting approval</Badge>
-          ) : (
-            <Badge tone="success">Nothing awaiting approval</Badge>
-          )
+          <span className="flex flex-wrap items-center gap-2">
+            {pending > 0 ? (
+              <Badge tone="warning">{formatNumber(pending)} awaiting approval</Badge>
+            ) : (
+              <Badge tone="success">Nothing awaiting approval</Badge>
+            )}
+            {/* The other half of the same job: this page approves teachers,
+                that one decides who can get this far. */}
+            <ButtonLink href="/admin/teachers/access">Teacher access</ButtonLink>
+          </span>
         }
       />
 
@@ -124,7 +129,7 @@ export default async function TeachersPage(props: { searchParams: Promise<Search
               description={
                 status === "pending"
                   ? "Every teacher account has been dealt with."
-                  : "Teachers sign up themselves and choose their college. They appear here for approval."
+                  : "Teachers register under the rules set on Teacher access, then appear here for approval."
               }
             />
           }
@@ -171,7 +176,11 @@ export default async function TeachersPage(props: { searchParams: Promise<Search
       <p className="mt-5 text-[12.5px] leading-relaxed text-slate-400 dark:text-slate-500">
         Showing {formatNumber(rows.length)} of {formatNumber(total)}. A teacher is confined to the
         college they chose at sign-up and to the subjects assigned here — neither can be changed by
-        the teacher.
+        the teacher. Who may sign up at all is set on{" "}
+        <a href="/admin/teachers/access" className="font-medium underline">
+          Teacher access
+        </a>
+        .
       </p>
     </>
   );

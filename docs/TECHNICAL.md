@@ -46,7 +46,8 @@ Scope delivered so far:
 | Continue with Google (OAuth 2.0 / OIDC) | implemented, untested against Google |
 | Signed-in shell: navigation rail, top bar, dashboard | done (dashboard cards show placeholder content) |
 | Social sign-in: Microsoft, Apple | buttons only, no OAuth backend |
-| Password reset, terms and privacy pages | placeholders |
+| Password reset | done — see §6.4b |
+| Terms and privacy pages | placeholders |
 | Tasks, wallet, streaks, timetable, notices, placements — data models | not started |
 | Catalogue / course / lesson UI, payments, uploads, tests | not started |
 
@@ -525,7 +526,7 @@ Per-endpoint reference lives in [routes/api/](routes/api/); a quick table is in
 | `/api/auth/google/start` | GET | public | mints state+nonce into an httpOnly cookie |
 | `/api/auth/google/callback` | GET | public | state must match the cookie; id_token verified against Google's JWKS |
 | `/api/auth/me` | GET | authenticated | `requireAuth` |
-| `/api/colleges/search` | GET | authenticated | `requireAuth` — it runs a regex query per keystroke, so it is not left open |
+| `/api/colleges/search` | GET | public, rate limited when signed out | it runs a regex query per keystroke, so it is metered rather than left open — 40 per address per five minutes. Teacher sign-up has to name a college before an account exists (§6.13a) |
 | `/api/courses` | GET | public | filter pinned to `published: true` |
 | `/api/courses` | POST | instructor, admin | `requireRole` |
 | `/api/courses/:idOrSlug` | GET | public | — |
@@ -552,6 +553,7 @@ Per-endpoint reference lives in [routes/api/](routes/api/); a quick table is in
 | `/api/admin/topic-content/generate` | POST | `topic_content.generate` | `withGenerationLimit` — per-admin rate limit, batch capped at 10 |
 | `/api/admin/topic-content/:id` | GET, PATCH | `topic_content.view`, plus `.edit` / `.review` per field | refuses `status: "published"` outright |
 | `/api/teacher/signup` | POST | public | role set server-side; college must be an id from the directory; rate limited per address and per college |
+| `/api/admin/teachers/signup-policy` | GET, PATCH | `teacher.view` / `teacher.approve` | who may register at a college; scoped to the administrator's own |
 | `/api/teacher/login` | POST | public | same `authenticate()` as students; a non-teacher gets the credential error, never "wrong door" |
 | `/api/teacher/profile` | GET, PUT | teacher | college and status are not editable fields |
 | `/api/teacher/academic-context`, `/subjects` | GET | teacher | resolved from `TeacherAcademicAssignment`; an unauthorised subject is never fetched, not filtered out |
@@ -601,7 +603,7 @@ is the authority; `proxy.ts` (§6.5) only does the cheap cookie check in front o
 | Piece | File | Role |
 | --- | --- | --- |
 | Shell | [app-shell.tsx](../src/components/app/app-shell.tsx) | holds the drawer state and the one shared notice slot |
-| Rail | [app-sidebar.tsx](../src/components/app/app-sidebar.tsx) | grouped navigation, active item, Upgrade card; fixed from `lg`, an off-canvas drawer below |
+| Rail | [app-sidebar.tsx](../src/components/app/app-sidebar.tsx) | grouped navigation, active item; fixed from `lg`, an off-canvas drawer below |
 | Top bar | [app-topbar.tsx](../src/components/app/app-topbar.tsx) | search, notification bell, account menu (where Sign out lives) |
 | Routes | [app-routes.ts](../src/lib/app-routes.ts), [nav.ts](../src/components/app/nav.ts) | one list of signed-in paths: the sidebar, the placeholder pages and the proxy all read it |
 | Cards | [dashboard-cards.tsx](../src/components/app/dashboard-cards.tsx) | the six dashboard cards |
@@ -610,8 +612,9 @@ is the authority; `proxy.ts` (§6.5) only does the cheap cookie check in front o
 `getCurrentUser()` ([current-user.ts](../src/lib/current-user.ts)) is wrapped in React's `cache`, so
 the layout and the page inside it share one query per request rather than each issuing their own.
 
-Eight of the sixteen sidebar destinations are built: `/dashboard`, `/curriculum`, `/assignments`,
-`/notes`, `/notifications`, `/profile`, `/settings` and `/wallet`. The other eight render
+Ten of the sixteen sidebar destinations are built: `/dashboard`, `/curriculum`, `/assignments`,
+`/notes`, `/notifications`, `/profile`, `/settings`, `/wallet`, `/service-requests` and `/refer`. The
+other six render
 [ComingSoon](../src/components/app/coming-soon.tsx), which names the section, says what it will do and
 states plainly that it is not built — so no sidebar entry is a dead link and none of them pretends to
 work. Each is a real route file, ready to be replaced by the actual screen. They are listed with
@@ -822,6 +825,79 @@ Credentials come from `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. With them uns
 redirects back to `/login?error=google-unavailable` and the page explains it is not configured, which
 is why the flow degrades rather than 500s on a deployment without Google set up.
 
+### 6.4b Password reset — `src/lib/password-reset.ts`
+
+The one flow that hands over an account, so every rule is stricter than anywhere else.
+
+Before this existed, `/forgot-password` was a placeholder whose own comment said a reset "needs a
+token collection and an email sender, neither of which exists yet". The email sender had since been
+built for verification; only the token collection was missing. Anyone who forgot their password was
+locked out permanently, students and teachers alike.
+
+#### The request tells you nothing
+
+`requestReset` returns the same value whether or not the address has an account, and the screen renders
+the same confirmation. Anything else turns the form into a way to ask "is this person a student here?"
+about any address in the world — which is a list worth having if you are writing a phishing mail.
+
+The **rate limit is keyed on the address as typed**, not on a resolved user, for the same reason.
+Limiting only real accounts would make the limiter itself the oracle the neutral response exists to
+close. Its error message describes the action, never the account.
+
+A **Google account** gets mail too, and that is the point: it has no password to reset, so the mail
+explains that to whoever holds the mailbox while the requester still learns nothing. Refusing at the
+form would leak which addresses are Google accounts.
+
+#### Link only, no code
+
+`EmailVerificationToken` carries a six-digit code beside its token; this deliberately does not. The two
+flows look similar and are not: confirming an address proves someone can read a mailbox, while
+resetting a password hands over the account. A million possibilities is a reasonable online-guessing
+surface for the first and an unreasonable one for the second.
+
+The token is stored as a SHA-256 hash, so a dump of the collection contains nothing that can be
+presented to the endpoint. `sentTo` is stored with it: a link proves control of *that* mailbox, so if
+the account's address has since changed, the authority the link represents has moved with it.
+
+A spent token is **kept, not deleted** — so a second click says "already used" rather than "invalid",
+which is a real difference to somebody who has just reset in another tab and is wondering whether it
+worked. The TTL clears it later.
+
+Claiming a token is a conditional update with `usedAt: null` in the filter, making "is it unused" and
+"mark it used" one atomic operation. Three concurrent submissions of one link leave exactly one
+succeeding.
+
+#### A reset revokes every session
+
+Somebody resetting a password usually believes another person is in their account. A reset that left
+those sessions working would be theatre.
+
+Sessions are stateless JWTs with no server-side store, so there is nothing to delete.
+`User.sessionsValidFrom` records the moment instead, and any token whose `iat` predates it is refused.
+
+**Where that check lives is the design.** `proxy.ts` imports `getSession` and runs before the database
+is reachable, so a query behind `getSession()` would break every request. The check therefore sits in
+the authoritative gates instead:
+
+| Gate | Cost |
+| --- | --- |
+| `getCurrentUser()` | free — the user document is already loaded |
+| `getCurrentTeacher()` | free — same |
+| `requireAuth()` | one indexed read, request-cached by `sessionIsCurrent` |
+| `proxy.ts` | **not checked** — a cheap cookie check by design, with the gates behind it |
+
+A one-second grace absorbs the rounding in `iat`, which is whole seconds: without it a session minted
+in the same second as a reset could be refused by a few hundred milliseconds. A token with no `iat`
+fails closed once anything has been revoked — it cannot prove it was minted after.
+
+The reset also **marks the address verified**. A reset proves mailbox control, which is exactly what
+verification proves, and asking twice would be asking for something already demonstrated.
+
+#### Where it lands
+
+`/login?reset=1`, with a confirmation. The reset signs every session out, so the student arrives at a
+sign-in form they did not ask for — and without a word it reads as the reset having failed.
+
 ### 6.5 Route protection — [proxy.ts](../src/proxy.ts) and [auth-routing.ts](../src/lib/auth-routing.ts)
 
 Three layers, each doing strictly less than the one below it:
@@ -925,17 +1001,22 @@ The semester card says when the position was **derived** from the admission batc
 and links to `/profile`. A derived semester is a guess, and the student is the only one who can
 correct it.
 
-**Controls with no backend say so.** Search, the notification bell and Upgrade to Pro all route
-through the shell's notice slot and state that they are not connected. The **Microsoft and Apple**
-buttons do the same — only Google has a real OAuth implementation (§6.4).
+**Controls with no backend say so.** Search is the last one — it routes through the shell's notice
+slot and states that it is not connected. The **Microsoft and Apple** buttons do the same; only Google
+has a real OAuth implementation (§6.4).
+
+The notification bell is no longer among them: it is a real link carrying a real unread count.
+**Upgrade to Pro** has been removed rather than wired — it advertised premium courses and career tools
+that do not exist, and a notice saying "not connected yet" cannot soften a promise the product has
+never intended to keep.
 
 **Google sign-in is unverified end to end.** The authorize URL, state/nonce round trip, token
 exchange, JWKS verification and account linking are all implemented, but nobody has run them against
 Google with real credentials yet. Expect first-run friction over the registered redirect URI.
 
-**Placeholder pages.** The nine unbuilt sidebar destinations (§6.1), plus `/forgot-password`,
-`/terms` and `/privacy`. A password reset needs a token store and an email sender; sign-up asks people
-to agree to terms nobody has written yet.
+**Placeholder pages.** The eight unbuilt sidebar destinations (§6.1), plus `/terms` and `/privacy`.
+Sign-up asks people to agree to terms nobody has written yet. `/forgot-password` is now real — see
+§6.4b.
 
 **Other gaps.** No rate limiting on either auth form (§8, item 9). The dashboard greeting is computed
 from **server** time, so it would read wrongly for anyone in another timezone — fine for one campus,
@@ -2030,6 +2111,242 @@ AI-assisted grading (§44 defers both). The S3 driver. `NoteRecipient` rows are
 written at publish time only, so a student who joins a cohort afterwards does
 not retroactively receive earlier notes.
 
+#### Editing, and the screens that were missing
+
+Three endpoints existed with nothing reaching them, which is the quietest kind of incomplete: the API
+works, the tests pass, and a teacher simply has no route to the thing.
+
+- **`PUT /api/teacher/assignments/:id`** had no page. A mistyped deadline was permanent.
+- **`PUT /api/teacher/notes/:id`** had no page. Correcting a figure in published notes meant archiving
+  them and starting again — which takes them out of every student's list in the meantime.
+- **Teacher notifications** were written and never displayed. `TEACHER_APPROVED` is the message that
+  tells somebody their account is now usable, and it went into the database and stopped.
+
+Both edit screens **reuse the create form** rather than getting their own. The fields, the validation
+and the wording of every error are identical, and the copy teachers touch less often is the one that
+would drift. What changes is the verb, the button, and one locked field.
+
+`subjectId` is absent from both update schemas and disabled in both forms. Re-pointing published work
+at another subject would leave every `AssignmentStudent` or `NoteRecipient` row against an audience
+that no longer matches, and the students holding them with no explanation. The form says so rather
+than showing a disabled control, which on its own just reads as a bug.
+
+Where the Edit link lives follows from where the teacher already is. A **draft** assignment's detail
+page carries it; a **published** one redirects to its submissions, so the link is there instead.
+**Closed** work has neither: the window is over, marks may be out, and changing the instructions
+underneath a grade makes the grade unexplainable. Archived notes are the same argument.
+
+The assignment form warns **before** the save that a material change notifies every recipient (§79).
+The notes form says the opposite, because it is true: nothing about notes is owed back or time-bound,
+so a correction is not something a student has to act on.
+
+Notes carry a list of links and the form edits one. The others ride along through the edit untouched —
+sending only the first would mean fixing a typo in the title silently deleted the rest.
+
+The teacher notifications page reuses the student notification centre. The service is keyed on
+`recipientId`, which is a `User` and not a student, and every href the rows carry already resolves for
+a teacher — so a second implementation would differ only in the shell around it.
+
+#### The dashboard's recent submissions were scoped wrongly
+
+`getTeacherDashboard` fetched the forty most recent submissions **across the whole platform** and
+narrowed them to this teacher afterwards. Correct on an empty database, and wrong on a real one: with
+any other teacher active, this teacher's rows fall outside the global forty and the panel reads
+"Nothing handed in yet" while their students are handing work in.
+
+It is a defect that only a populated database shows, so it was invisible in every environment small
+enough to develop against — which is why the
+[regression test](../tests/integration/teacher-dashboard.test.ts) inserts sixty foreign submissions and
+asserts the teacher's own row survives. The filter has to be *in* the query for the limit to mean
+"forty of mine".
+
+The same query excluded `graded`, so a submission vanished from recent activity the moment it was
+marked. The panel is activity, not a queue — "how many are waiting" is already its own figure above it.
+
+#### Not built
+
+**A teacher is not notified when a student submits.** There is no `SUBMISSION_RECEIVED` type, and
+adding one would mean a notification per student per assignment — two hundred for one deadline, which
+is how a notification list gets muted. The dashboard answers the same question in aggregate: how many
+are waiting to be marked, and who handed in most recently.
+
+A teacher resets a password the same way a student does (§6.4b) — the reset looks up the account by
+address and does not care about the role, and the sign-in it lands on routes by role. There is no way
+for a teacher to change their own name or email; the college is deliberately not editable at
+all, since it is the scope every other query is confined to.
+
+### 6.13a Who may become a teacher — `src/lib/teaching/invites.ts`
+
+A teacher account is a claim on a college's students, and until now **anyone could make it**: pick any
+institution from the directory, sign up, and land in its approval queue.
+
+With one college that is a nuisance an administrator absorbs. Across a few hundred it is two problems.
+Anybody can bury any queue on the platform — signing up is free and the rate limit is per address. And
+the administrator approving is looking at a name and an email they have never seen, with nothing to
+check either against. `TEACHER_AUTO_APPROVE` made it worse: a single environment variable that could
+only say "trust every teacher at every institution" or "trust none".
+
+#### The college decides
+
+`College.teacherSignup.mode`, one of three:
+
+| Mode | Who may register | For |
+| --- | --- | --- |
+| `invite_only` | only addresses somebody at the college has invited | **the default** |
+| `domain` | anyone on the college's own email domains | an institution with a thousand staff nobody can invite one at a time |
+| `open` | anyone, pending approval | a small college running its own approvals |
+
+**Absent means invite-only.** A college that has configured nothing should not be claimable by anyone
+who can find it in a dropdown, which is exactly what used to happen. There were no real teachers in the
+system when this landed, so locking down by default cost nothing to migrate.
+
+`autoApprove` moves to the college too. The platform-wide env flag still works, as a floor rather than
+a replacement.
+
+#### Invitations
+
+`TeacherInvite` is issued to an **address**, not to a person. That is the whole control: the link can
+be forwarded to anybody, and only the mailbox it names can spend it, so possession of the link is not
+possession of the account. The token is stored as a SHA-256 hash — a dump of the collection would
+otherwise be a list of working ways into a college's teaching staff.
+
+An invitation is checked **first and regardless of mode**. A college switching to `domain` must not
+invalidate the invitations it has already sent, and somebody holding one has a stronger claim than any
+policy default.
+
+The refusal for a wrong address names it **masked** (`r****h@vrsec.ac.in`): enough for the right person
+to recognise their own, not enough to hand somebody else's to a stranger holding the link.
+
+Spending it is a conditional update, so two sign-ups racing on one link cannot both win, and it happens
+**after** the account exists — a sign-up that errors half way should leave the link usable rather than
+forcing the teacher to ask for another.
+
+The partial unique index on `(collegeId, email)` binds only while an invitation is outstanding: an
+address that was invited, used it and later left can be invited again, and a revoked one can be
+re-sent. A plain unique index would make both a duplicate-key error nobody can act on.
+
+#### Domain matching is on a boundary, not a suffix
+
+`emailMatchesDomains` accepts `cse.vrsec.ac.in` for `vrsec.ac.in`, because institutional mail is
+usually arranged that way and a teacher does not choose their sub-domain. It refuses
+`notvrsec.ac.in` — which a bare `endsWith` would accept, and which anybody can register.
+
+An **empty** allowlist on a college in `domain` mode refuses everyone. Reading a misconfiguration as
+"allow anything" turns a mistake into an open door.
+
+#### One sign-up page
+
+`/signup` now carries a student/teacher switch, and `/teacher/signup` redirects to
+`/signup?role=teacher` — that path is in the docs and quite possibly in an email somebody sent a
+colleague, so a 404 would read as teacher accounts having been removed.
+
+The forms stay separate, because a teacher needs a college and has to clear its policy. An invitation
+is resolved **server-side** so the address and college it fixes are never the client's to choose, and
+the form renders them read-only. `GET /api/teacher/signup/policy` lets the form say what a college
+requires *before* six fields are filled in; `checkEligibility` decides on submit regardless, so what
+the screen says and what the server accepts cannot drift.
+
+#### The picker had to work before the account did
+
+`GET /api/colleges/search` sat behind `requireAuth`, which was right while onboarding was its only
+caller: by then everyone has an account, and an open endpoint running a regex per keystroke is a free
+way to keep the database busy.
+
+Teacher sign-up broke that assumption and nobody noticed, because the form fails quietly — a 401 per
+keystroke looks exactly like a college that is not in the directory. There is deliberately no
+free-text fallback here, so the picker is the only way through the form: every teacher signing up hit
+a field that never found anything, on a page with no other route forward.
+
+It is now public and rate limited when signed out — 40 searches per address per five minutes, which is
+far above what typing a college name costs at one debounced request per 250ms and far below what
+hammering the regex needs. The directory was never the secret; the query cost was the thing being
+protected, and a limit protects it directly. `x-forwarded-for` is client-controlled, so a determined
+caller can spread across made-up addresses; that is accepted, because this guards the cost of a
+lookup on a public list rather than access to anything.
+
+The picker was also reading `city` and `stateName` from the response, fields this endpoint has never
+sent — it returns a single `location` string. The second line under each result was therefore always
+blank, which matters most in exactly the case it exists for: two colleges of the same name.
+
+#### One set of auth chrome
+
+Putting the teacher form on `/signup` made an older problem visible: the teacher forms drew their own
+page. `TeacherSignupForm` rendered a full-screen shell — its own brand mark, its own heading, its own
+card on a grey background — so nesting it inside the page's `AuthShell` produced two of each. The
+teacher sign-in drew the same one on its own route.
+
+They are now plain forms. The page supplies `AuthShell`; every input comes from
+[`components/auth/fields.tsx`](../src/components/auth/fields.tsx). That was not only tidier: the
+teacher inputs were a private copy of the student ones from before dark mode existed, so they had no
+dark variants — white boxes on a dark panel — and no show-password toggle, no icon and no error
+banner. A second copy of "what an input looks like" is a second thing to keep in step, and this one
+had already fallen behind.
+
+`LABEL`, `INPUT_PLAIN` and `INPUT_READONLY` are exported for the one input the shared components
+cannot own: the college combobox, which needs its own focus and keyboard handling. `TextField` grew a
+`readOnly` prop for an address fixed by an invitation — read-only rather than disabled, because a
+disabled input is skipped by the keyboard and not read out, and this is a value the person has to be
+able to check.
+
+The panel copy moved to [`panel-features.tsx`](../src/components/auth/panel-features.tsx) for the same
+reason. Four auth screens each declaring their own bullets is four descriptions of one product, and
+they had already drifted into generic marketing — "find opportunities", "network with peers and
+mentors" — for a product with neither a jobs board nor a social graph. Each line now names something
+that is actually behind the form, per audience.
+
+`/teacher/login` keeps its route rather than folding into `/login`. Everything that gates on the
+teacher role redirects there, including `proxy.ts`, which runs before the database is reachable and so
+can only tell a teacher's request from a student's by its URL. What changed is the chrome, not the
+route.
+
+#### Sending it, and changing the policy — `/admin/teachers/access`
+
+Both of the gaps this section used to list are closed. They were closed together because they are one
+job: an administrator who sets invite-only has, by that act, taken on sending the invitations, and
+making them navigate elsewhere to do it is how a college ends up invite-only with nobody invited.
+
+`POST /api/admin/teachers/invites` now mails the link through the existing Brevo transport, and
+`sendTeacherInviteEmail` sits beside the verification and reset senders — every message the product
+can send is still a list one file long.
+
+The send is **awaited**, not deferred to `after()` as most post-response work here is. An
+administrator invites one person at a time and the next thing they do depends on the answer; finding
+out the mail bounced when the teacher never signs up is worse than waiting a second for it. A failure
+does not undo the invitation: it exists, the link is valid, and `emailed: false` tells the screen to
+say "send this by hand" instead of "sent".
+
+The link is still returned in the response either way. That remains deliberate now that mail works —
+the token is stored hashed, so a bounced invitation would otherwise be unrecoverable and the only
+remedy would be revoking and re-issuing.
+
+`setPolicy` refuses three things rather than leaving them to the form, because a policy that quietly
+means something other than it says is worse than an error:
+
+| Refused | Why |
+| --- | --- |
+| `domain` with an empty allowlist | `checkEligibility` reads it as "refuse everyone". An administrator choosing `domain` means the opposite, and would find out when a teacher could not sign up |
+| a domain with no dot, or that normalises to nothing | `vrsec` or `localhost` matches no real address, so the allowlist is the same silent refusal |
+| a public mailbox provider | `gmail.com` on the allowlist is not weaker than `open`, it is **worse**: it reads as "our staff" and means "anybody", and nobody reviewing the setting later would notice |
+
+Domains are **kept** when the mode moves away from `domain`, and are inert while it is anything else.
+An administrator switching to invite-only for a term and back should not have to retype the list.
+
+`autoApprove` can be turned on and off per college, but cannot switch off the platform-wide
+`TEACHER_AUTO_APPROVE` floor. A deployment that set that variable is trusting every college, and a
+college saying "no thanks" to that is not something this setting can express — so it says so on the
+screen rather than appearing to work.
+
+The invitation email names the **college and the administrator who sent it**, before anything else.
+This is the one mail the product sends to an address that has never heard of it, and the first
+question about an unexpected link is "who is this from" — an answer the recipient can check against
+their own institution is what makes it safe to click.
+
+#### Not built
+
+A college admin can only configure their own institution; a platform admin with no college of their
+own is told to open one from Colleges rather than shown an empty form. Bulk invitation (a pasted list
+of addresses) is the obvious next thing and is not there.
+
 ### 6.14 Payments and the campus wallet — `src/lib/payments/`
 
 Students add money with Razorpay and spend it on campus services. One wallet per user, one
@@ -2098,6 +2415,39 @@ verification time could pay ₹10 and be credited ₹10,000 — and no signature
 the signature is over ids, not amounts. Razorpay is also re-asked what the payment is worth: a
 signature proves a message came from Razorpay, not that the payment is still captured.
 
+#### The official SDK, with three things kept back
+
+`razorpay` (one dependency, `axios`) owns the transport, the endpoint paths and the response shapes.
+Three things stay in [razorpay.ts](../src/lib/payments/razorpay.ts), each for a reason:
+
+**A timeout.** `IRazorpayConfig` is `{ key_id, key_secret, headers, oauthToken }` — no timeout option,
+no axios passthrough. A hung order-create with no deadline is a student watching a spinner with no way
+to know whether they have been charged. `Promise.race` is the honest tool here: it stops us *waiting*,
+it does not cancel the request. That is acceptable because a late response has nothing left to mutate,
+and an order created after we gave up is an orphan either way — cancelling client-side never un-does a
+server-side write.
+
+**Error mapping onto the closed set.** The SDK throws a plain `{ statusCode, error }` object, not an
+`Error`, so `instanceof` is no help and the shape has to be sniffed. `orders.ts` branches on
+`retryable` to decide whether a webhook should return non-2xx and be redelivered, so that decision has
+to survive whatever the vendor throws. There is also a rough edge worth knowing: their `normalizeError`
+reads `err.response.status` unguarded, so a DNS failure or a dropped connection throws a `TypeError`
+from inside the SDK rather than producing an error object. It is caught and reported as `unavailable`,
+which is what it is.
+
+**Signature verification.** Deliberately *not* `Razorpay.validateWebhookSignature`, and this is the one
+worth stating because reaching for the vendor helper is the obvious move. Theirs compares with
+`expectedSignature === signature`, which is not constant-time, and it **throws** when the signature
+header is missing — turning a malformed request into a 500 where it should be a 400. The maths is four
+lines and identical; only the comparison and the failure mode differ, and both differences favour the
+local version.
+
+The client is constructed **per call**, not once at module scope: the SDK takes its credentials in the
+constructor, so a cached instance would keep serving a key that has since been rotated out.
+
+That the swap from a hand-rolled `fetch` client to the SDK changed no caller and no test is the
+evidence the seam was worth having — all six importers use the exported functions, never the transport.
+
 #### Three credentials, and they are not interchangeable
 
 | Variable | Secret? | Used for |
@@ -2146,6 +2496,204 @@ Nothing calls `debitWallet()` yet. It is exported, tested and ready for a cantee
 or a hostel fee — but there is no campus service to spend on, and building a checkout for one that does
 not exist would be guessing at its flow. Subscriptions, saved cards and payment links are not
 implemented; none of them is needed for a wallet.
+
+### 6.15 Support requests — `src/lib/service-requests/`
+
+Students report a problem with **EduPilot** and follow it; the team works a queue.
+
+#### Scoped to the platform, deliberately
+
+The first version of this was a campus help desk — bonafide certificates, hostel repairs, mess
+complaints, fee receipts. That was wrong, and the reason is worth keeping: **there is no registrar in
+this product, no warden and no fee office.** Those requests would have arrived, sat in a queue nobody
+could act on, and taught students that raising one achieves nothing. A category the platform cannot
+resolve is worse than no category at all.
+
+What it handles instead is what EduPilot actually owns: an account somebody cannot get into, a top-up
+that did not arrive, a subject list that is wrong, an AI answer that was not good enough, a page that
+will not load.
+
+#### One collection, not eight
+
+A locked account and a feature suggestion have little in common, which is the argument for a table per
+kind. It is the wrong argument: what they share is the whole product here — somebody raises it,
+somebody works it, and the first somebody follows its progress. A table per kind needs a ninth the
+first time anyone reports something new.
+
+The category and type are a **fixed list**, not free text. That is what makes a queue sortable and a
+target meaningful: "nine students cannot sign in" is an incident, "nine assorted problems" is not.
+`other` in each group is the escape hatch, and the subject line carries the detail.
+
+#### The request and its timeline are separate
+
+`ServiceRequest` is a row that changes; `ServiceRequestEvent` is the record of **how** it changed, and
+it is append-only. Folding the second into an array on the first would mean a document that grows
+without bound and a history an `$set` can silently rewrite — and "who moved this to declined, and
+when" is exactly the question asked when a student says nobody told them.
+
+#### Two confidentiality boundaries
+
+**A student reads only their own.** Every query filters on `studentId` rather than checking ownership
+afterwards, so "not yours" and "does not exist" are the same 404 and an id cannot be probed to learn
+what anyone else has asked for.
+
+**Internal notes are filtered in the query.** The desk needs somewhere to write "chased the registrar,
+waiting on their sign-off" without it reading as a reply to the student; without that, the note goes in
+a spreadsheet and the request stops being the record of itself. The student read path never *selects* a
+row with `internal: true` — a `.filter()` that gets refactored away is a leak, while a query condition
+that gets refactored away is an empty list.
+
+Staff are shown to students as **"EduPilot support"**, never by name. A student does not need to know
+which clerk declined their request, and naming them is how one person becomes the target of a complaint
+about a decision the institution made. The desk's own view shows everything, internal notes marked as
+such, so a clerk can see at a glance what the student has and has not been told.
+
+#### Target dates order the queue
+
+Each category carries a working-day target (`TARGET_DAYS`), and the queue sorts by it rather than by
+age. Oldest-first buries a student locked out of their account behind a stack of feature suggestions;
+the target already encodes how much being stuck costs, so sorting by it is sorting by urgency.
+
+The numbers say what the product thinks is expensive: **one day** for an account nobody can get into,
+because until it is fixed EduPilot is unusable to them; **two** for money that left their account and
+did not arrive; **ten** for feedback, which blocks nobody — but not unbounded, because a suggestion
+nobody ever answers is a suggestion nobody sends twice.
+
+Overdue is **computed**, never stored — it is a fact about the clock, so storing it would need a job
+walking every open request at midnight and would be wrong in between.
+
+A Friday request with a one-day target is due Monday. Nobody is at the desk on Saturday.
+
+**Priority is set by the desk, never by the student.** A form where everyone can mark their own request
+urgent is a form where every request is urgent, and the field stops meaning anything. It is absent from
+the student schema rather than merely ignored.
+
+#### Rules the service holds
+
+- **A decline must say why.** `rejected` without a resolution is refused. A declined request with no
+  reason is the most common cause of a student arriving at a counter to ask the same question.
+- **A student reply moves it off "waiting on you".** The desk asked and got an answer; leaving it
+  parked means somebody has to notice and change it by hand, and until they do the status says the ball
+  is with the student when it is not.
+- **Cancelling is atomic with the check that it is still open**, so a cancel racing the desk's
+  resolution cannot overwrite the resolution.
+- **The open-request cap is on open requests**, not on requests ever. Ten open is usually one person
+  who raised the same thing ten times because nothing appeared to happen; closing one frees a slot
+  immediately, which a per-day-only limit would not.
+- **Notifications fire only on a status change or a visible reply.** An internal note or a priority
+  bump is the desk organising itself, and notifying on it trains students to ignore the ones that
+  matter. The category is `account`, and therefore not mutable — "we need something from you"
+  decides whether a request is ever finished.
+
+#### Ticket numbers
+
+`SR-2026-00042`, from a one-row-per-year counter incremented with `$inc`. Students quote this to
+somebody who is not looking at a screen, which rules out an ObjectId. Counting existing requests and
+adding one would hand the same number to two students submitting in the same instant, and the unique
+index would then reject a request that was perfectly valid.
+
+#### What it reuses
+
+`StoredFile` and the permission-checked `/api/files/:id` route for attachments in both directions —
+usually a screenshot going one way and a corrected export or a receipt coming back. Neither has any
+business being served from a guessable path. The notification service for every
+update. The admin permission and college-scoping machinery, unchanged: every query is scoped to the
+administrator's own college when they have one, so a campus admin runs their desk and a platform admin
+sees all of them without either asking.
+
+#### Not built
+
+No attachment upload from the student form yet — the model, the storage policy and the download route
+all support it, and only the picker is missing. No email for updates (in-app only, like everything
+else). No canned replies, no reassignment to another clerk, and no reporting beyond the queue counts.
+
+### 6.16 Refer & Earn — `src/lib/referrals/`
+
+A student shares a code, a friend signs up with it, and both are paid into the campus wallet when the
+friend finishes their profile.
+
+#### The reward lands on qualification, not signup
+
+This is the whole design, and everything else is detail. An account is free to create, so paying on
+signup is paying for disposable mailboxes. A **completed academic profile at a real college, with a
+confirmed address**, costs enough effort that farming it is not worth ₹50 — and it is also the thing
+the platform actually wants, which makes the incentive point the right way.
+
+The hook is in `saveAcademicSelection`, at the moment a profile first becomes complete. It is wrapped
+in a `try` that logs and swallows: a bonus that cannot land must never stop a student's profile being
+saved.
+
+#### What does not earn a reward
+
+| Guard | How it is enforced |
+| --- | --- |
+| One person is referred **once, ever** | A unique index on `Referral.refereeId` |
+| Self-referral | Refused at signup on the id, and re-checked on the stored row at qualification |
+| The referrer has not finished their own profile | Checked at qualification, rejected with a reason |
+| Past the cap (20 by default) | Counted at qualification |
+| Paying twice for one referral | The referral is claimed with a conditional update, and the wallet keys refuse a duplicate credit |
+
+The unique index is the one that matters. Without it an account that signs up, is rewarded, deletes its
+profile and signs up again earns twice — and a database guarantee is the only version of that check
+which survives two requests arriving together.
+
+Requiring the **referrer** to be a finished student is the least obvious guard and does the second most
+work: without it the cheapest farm is one throwaway account issuing codes to twenty more, where the
+referrer never has to do anything at all. Making them complete the same work doubles the cost of every
+fake chain.
+
+None of this is clever, and it does not need to be. The aim is to make farming cost more than the
+reward is worth, not to make it impossible.
+
+#### A guard that could not fire was removed
+
+An earlier version compared the two accounts' **email addresses** at qualification. `User.email`
+carries a unique index, so two accounts cannot share an address and the comparison could never be true.
+It is now an id comparison on the stored row, which can fire — for a row written by a seed, an import
+or a bug. A guard that cannot fire is worse than no guard, because it reads like protection.
+
+The test that found it was trying to construct two users with one address, and the unique index refused.
+
+#### Codes
+
+Eight characters from a 31-letter alphabet with `0`/`O` and `1`/`I`/`L` removed. A referral code is
+dictated across a table in a canteen, and a code that fails because somebody heard an O for a zero is a
+referral that does not happen. `normaliseCode` accepts what a reader plausibly types back: lower case,
+surrounding spaces, an inserted hyphen.
+
+Random rather than derived from the name or the user id — a derived code leaks whose it is. Enumeration
+matters less than it sounds (knowing a code lets you credit its owner, not steal from them) but costs
+nothing to avoid.
+
+Issuing retries on a collision: 8.5e11 codes makes one vanishingly unlikely, and the unique index turns
+"vanishingly unlikely" into a retry rather than two students sharing a code and one never being paid.
+
+#### Both signup paths attribute
+
+`signupAction` (the form) and `POST /api/auth/register` (the API) both call `recordSignup`. A referral
+that only worked through the form would be a silent difference between the two — the kind found months
+later by a student asking where their reward went.
+
+`recordSignup` **never throws**. A student who cannot register because somebody mistyped a code is a far
+worse outcome than an unattributed invite.
+
+The code is validated for **shape only** on the sign-up page, never looked up. Checking existence there
+would let somebody probe which codes exist by watching whether the banner appears.
+
+#### Money
+
+Paid through the wallet ledger as a `referral` transaction, so a student's statement reads "Referral
+bonus" rather than something that looks like an administrator moved their balance by hand. What each
+side was paid is recorded **on the referral**, not recomputed from the current setting: an operator who
+raises the bonus next term must not appear to have retroactively paid everyone more.
+
+`REFERRAL_REWARDS_ENABLED=false` turns off the money and leaves sharing working.
+
+#### Not built
+
+No admin screen — codes can be disabled in the database but nothing surfaces the programme's cost or
+flags a suspicious chain. No leaderboard, no tiers, no expiry on a pending referral. Fraud detection is
+the four rules above and nothing adaptive.
 
 ## 7. Environment, commands, local setup
 
@@ -2331,9 +2879,8 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
    token version / denylist or server-side sessions.
 11. No CSRF token. `sameSite=lax` blocks cross-site POSTs from forms and fetch, which covers the
    common case, but it is the only defence.
-12. No password reset and no audit log. `/forgot-password` is a placeholder that says so. Email
-    verification is now implemented (§6.4a); password reset should reuse the same hashed-token
-    machinery rather than growing a second copy of it.
+12. No audit log. Password reset is now implemented (§6.4b) on the same hashed-token machinery as
+    verification (§6.4a), so there is one copy of it rather than two.
 13. **The verification link is consumed on `GET`.** A mail scanner that prefetches links will spend
     the token before the student clicks, who then sees "invalid" and has to resend. The alternative —
     a landing page with a Confirm button — costs every user a click to protect against some. Less
@@ -2425,7 +2972,6 @@ Recorded so they are decisions, not surprises. Roughly in priority order.
 3. Fix §8 items 1–3: published gate on course detail, progress recompute on lesson delete, numeric
    query-param guards.
 4. Login rate limiting — the limiter is built (§3.6); apply it to `/api/auth/login`.
-5. Password reset, reusing the token machinery from §6.4a.
 6. The profile screen: photo, bio, skills, interests, LinkedIn, GitHub, résumé — the fields
    deliberately kept out of onboarding, plus phone and city.
 7. Product UI: catalogue → course detail → lesson player with progress; then wire the dashboard's

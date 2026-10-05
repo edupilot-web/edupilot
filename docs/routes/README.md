@@ -16,12 +16,13 @@ means a new file here plus a row in the tables below.
 
 | Route | Access | Doc | Built? |
 | --- | --- | --- | --- |
-| `/` | public | [pages/root.md](pages/root.md) | yes — marketing hero, most header links 404 |
+| `/` | public | [pages/root.md](pages/root.md) | yes — hero, features, how it works, teachers, footer |
 | `/login` | public | [pages/login.md](pages/login.md) | yes |
 | `/signup` | public | [pages/signup.md](pages/signup.md) | yes |
 | `/verify-email` | public | [pages/verify-email.md](pages/verify-email.md) | yes — link target *and* the check-your-inbox screen |
 | `/onboarding/*` | session | [pages/onboarding.md](pages/onboarding.md) | yes — two steps plus a completion screen |
-| `/forgot-password` | public | [pages/forgot-password.md](pages/forgot-password.md) | placeholder — no reset flow |
+| `/forgot-password` | public | [pages/forgot-password.md](pages/forgot-password.md) | yes — sends a reset link |
+| `/reset-password` | public (token) | not written — see [TECHNICAL.md §6.4b](../TECHNICAL.md) | yes — sets the new password |
 | `/terms` | public | [pages/terms.md](pages/terms.md) | placeholder — no text written |
 | `/privacy` | public | [pages/privacy.md](pages/privacy.md) | placeholder — no text written |
 | `/api-reference` | public | [pages/api-reference.md](pages/api-reference.md) | yes — hand-maintained list |
@@ -36,10 +37,14 @@ means a new file here plus a row in the tables below.
 | `/profile` | session | not written — see [TECHNICAL.md §6.10](../TECHNICAL.md) | yes — read-only, links to the academic flow in edit mode |
 | `/settings` | session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — notification preferences |
 | `/wallet` | session | not written — see [TECHNICAL.md §6.14](../TECHNICAL.md) | yes — balance, top-up, statement |
-| `/teacher/login`, `/teacher/signup` | public | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes |
-| `/teacher/**` | teacher session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — dashboard, assignments, submissions, notes, students, profile |
+| `/service-requests`, `/service-requests/[id]` | session | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) | yes — report a problem with EduPilot, track, reply, cancel |
+| `/refer` | session | not written — see [TECHNICAL.md §6.16](../TECHNICAL.md) | yes — code, share link, invite list |
+| `/teacher/login` | public | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes, shared `AuthShell` |
+| `/teacher/signup` | public | redirects to `/signup?role=teacher` | yes |
+| `/admin/teachers/access` | `teacher.view` | not written — see [TECHNICAL.md §6.13a](../TECHNICAL.md) | yes |
+| `/teacher/**` | teacher session | not written — see [TECHNICAL.md §6.13](../TECHNICAL.md) | yes — dashboard, assignments (list, create, edit, submissions), notes (list, create, edit), notifications, students, profile |
 | `/admin/**` | admin session | not written — see [TECHNICAL.md §6.7, §6.9, §6.12, §6.13](../TECHNICAL.md) | yes |
-| 8 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
+| 6 sidebar routes | session | [pages/app-placeholders.md](pages/app-placeholders.md) | no — each says so on screen |
 
 ## API
 
@@ -64,6 +69,9 @@ means a new file here plus a row in the tables below.
 | GET | `/api/curriculum/subjects/:id/topics` | session | [api/learning.md](api/learning.md) |
 | GET | `/api/curriculum/search` | session | [api/learning.md](api/learning.md) |
 | POST | `/api/teacher/signup`, `/api/teacher/login` | public | [api/teaching.md](api/teaching.md) |
+| GET | `/api/teacher/signup/policy` | public | not written — see [TECHNICAL.md §6.13a](../TECHNICAL.md) |
+| GET, PATCH | `/api/admin/teachers/signup-policy` | `teacher.view` / `teacher.approve` | not written — see [TECHNICAL.md §6.13a](../TECHNICAL.md) |
+| GET, POST, DELETE | `/api/admin/teachers/invites` | `teacher.view` / `teacher.approve` | not written — see [TECHNICAL.md §6.13a](../TECHNICAL.md) |
 | GET, PUT | `/api/teacher/profile` | teacher | [api/teaching.md](api/teaching.md) |
 | GET | `/api/teacher/academic-context`, `/api/teacher/subjects` | teacher | [api/teaching.md](api/teaching.md) |
 | GET, POST | `/api/teacher/assignments` | teacher | [api/teaching.md](api/teaching.md) |
@@ -85,6 +93,11 @@ means a new file here plus a row in the tables below.
 | POST | `/api/webhooks/razorpay` | signature only | [api/payments.md](api/payments.md) |
 | GET | `/api/admin/payments` | `payment.view` | [api/payments.md](api/payments.md) |
 | POST | `/api/admin/payments/refund` | `payment.refund` | [api/payments.md](api/payments.md) |
+| GET, POST | `/api/service-requests` | session | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) |
+| GET | `/api/service-requests/:id` | the owner | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) |
+| POST | `/api/service-requests/:id/comments`, `/cancel` | the owner | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) |
+| GET | `/api/admin/service-requests[/:id]` | `service_request.view` | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) |
+| PATCH | `/api/admin/service-requests/:id` | `service_request.handle` | not written — see [TECHNICAL.md §6.15](../TECHNICAL.md) |
 | GET | `/api/admin/teachers` | `teacher.view` | [api/teaching.md](api/teaching.md) |
 | POST | `/api/admin/teachers/:id/status` | `teacher.approve` | [api/teaching.md](api/teaching.md) |
 | GET, POST, DELETE | `/api/admin/teachers/:id/subjects` | `teacher.assign` | [api/teaching.md](api/teaching.md) |
